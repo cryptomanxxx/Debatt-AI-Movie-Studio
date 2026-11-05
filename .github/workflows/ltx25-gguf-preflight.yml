@@ -1,0 +1,31 @@
+name: LTX 2.5 GGUF Feasibility (metadata only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Offline preflight tests
+        run: python -m unittest discover -s tests -p 'test_ltx25_gguf_preflight.py' -v
+      - name: Install Hugging Face metadata client
+        run: python -m pip install 'huggingface_hub>=0.35,<2'
+      - name: Inspect complete GGUF candidate checkpoint packs without downloading
+        run: python -m scripts.ltx25_gguf_preflight --output preflight/ltx25-gguf-report.json
+      - name: Upload metadata report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ltx25-gguf-feasibility-${{ github.run_id }}
+          path: preflight/ltx25-gguf-report.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -20,3 +20,5 @@ jobs:
         run: |
           python -m movie_studio.cli plan examples/first-film.txt --out /tmp/movie-plan.json
           python -m movie_studio.cli budget /tmp/movie-plan.json --gpu-seconds-per-video-second 45
+          python -m movie_studio.cli queue /tmp/movie-plan.json --out /tmp/movie-queue.json
+          python -m movie_studio.cli validate-queue /tmp/movie-queue.json

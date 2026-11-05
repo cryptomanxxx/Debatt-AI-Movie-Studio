@@ -81,7 +81,7 @@ def main() -> int:
     (SUBMISSION / "run.py").write_text(source, encoding="utf-8")
     metadata = {
         "id": kernel_name,
-        "title": "Debatt AI Movie Studio GPU Probe",
+        "title": "Debatt AI Movie GPU Probe",
         "code_file": "run.py",
         "language": "python",
         "kernel_type": "script",

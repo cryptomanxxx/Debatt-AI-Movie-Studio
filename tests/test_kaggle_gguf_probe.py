@@ -1,6 +1,9 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from scripts.kaggle_gguf_probe import KERNEL_SOURCE, validate_report
+from scripts.kaggle_gguf_probe import KERNEL_SOURCE, retrieve_diagnostics, validate_report
 
 
 class KaggleGGUFProbeTests(unittest.TestCase):
@@ -19,3 +22,13 @@ class KaggleGGUFProbeTests(unittest.TestCase):
             changed = {**good, key: value}
             with self.assertRaises(ValueError):
                 validate_report(changed, "a" * 40, "123-1")
+
+    def test_failed_kaggle_run_still_collects_diagnostics(self):
+        with TemporaryDirectory() as tmp:
+            with patch("scripts.kaggle_gguf_probe.RESULTS", Path(tmp)):
+                with patch("scripts.kaggle_gguf_probe.execute") as run:
+                    run.return_value.returncode = 1
+                    run.return_value.stdout = "Notebook failed; inspect gguf-probe.json"
+                    self.assertFalse(retrieve_diagnostics("name/kernel"))
+                    self.assertIn("Notebook failed", (Path(tmp) / "download.log").read_text())
+                    run.assert_called_once()

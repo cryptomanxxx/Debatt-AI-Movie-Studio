@@ -2,6 +2,7 @@
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -65,6 +66,22 @@ def validate_report(record, sha, run_id):
         raise ValueError("Invalid or stale GGUF environment probe result")
 
 
+def retrieve_diagnostics(kernel):
+    """Best-effort output collection, including when Kaggle reports failure.
+
+    Never mask the original terminal failure with a diagnostics error.
+    """
+    try:
+        output = execute(["kaggle", "kernels", "output", kernel,
+                          "-p", str(RESULTS), "--force"], timeout=180)
+        (RESULTS / "download.log").write_text(output.stdout, encoding="utf-8")
+        return output.returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        (RESULTS / "download.log").write_text(f"Diagnostics retrieval failed: {exc}\n",
+                                                  encoding="utf-8")
+        return False
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--sha", required=True)
@@ -110,14 +127,15 @@ def main():
             complete = True
             break
         if status in {"ERROR", "FAILED", "CANCELED", "CANCELLED", "CANCELLING", "CANCELING"}:
+            retrieve_diagnostics(kernel)
             raise RuntimeError(f"Kaggle GGUF probe failed: {status}")
         if status not in {"QUEUED", "RUNNING", "STARTING", "INITIALIZING"}:
             raise RuntimeError(f"Unknown Kaggle status: {status}")
         time.sleep(POLL_SECONDS)
     if not complete:
+        retrieve_diagnostics(kernel)
         raise RuntimeError("Bounded GGUF probe polling timed out")
-    output = execute(["kaggle", "kernels", "output", kernel, "-p", str(RESULTS), "--force"], timeout=180)
-    if output.returncode:
+    if not retrieve_diagnostics(kernel):
         raise RuntimeError("Failed to retrieve Kaggle GGUF probe output")
     path = RESULTS / "gguf-probe.json"
     if not path.is_file():

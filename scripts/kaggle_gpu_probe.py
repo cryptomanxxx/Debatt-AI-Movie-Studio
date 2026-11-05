@@ -101,21 +101,21 @@ def main() -> int:
     (RESULTS / "submission.log").write_text(submitted.stdout, encoding="utf-8")
     print(submitted.stdout)
     if submitted.returncode != 0 or re.search(
-        r"(?im)^\\s*(kernel push error|error pushing|failed:|traceback)", submitted.stdout
+        r"(?im)^\s*(kernel push error|error pushing|failed:|traceback)", submitted.stdout
     ):
         raise RuntimeError("Kaggle rejected the submission")
-    if not re.search(r"kernel version \\d+ (successfully )?pushed", submitted.stdout, re.I):
+    if not re.search(r"kernel version \d+ (successfully )?pushed", submitted.stdout, re.I):
         raise RuntimeError("Kaggle CLI did not confirm a new version")
 
     completed = False
     for _ in range(MAX_POLLS):
         state = execute(["kaggle", "kernels", "status", kernel_name], timeout=60)
         with (RESULTS / "status.log").open("a", encoding="utf-8") as log:
-            log.write(state.stdout + "\\n")
+            log.write(state.stdout + "\n")
         print(state.stdout, flush=True)
         if state.returncode != 0:
             raise RuntimeError("Kaggle status command failed")
-        match = re.search(r"KernelWorkerStatus\\.([A-Z_]+)", state.stdout)
+        match = re.search(r"KernelWorkerStatus\.([A-Z_]+)", state.stdout)
         if not match:
             raise RuntimeError("Unexpected Kaggle worker status")
         status = match.group(1)

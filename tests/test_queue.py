@@ -32,6 +32,29 @@ class QueueTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_queue(q)
 
+    def test_rejects_tampered_payload(self):
+        original = build_queue(self.plan)
+        for field, value in [
+            ("prompt", "Changed without recomputing key"),
+            ("duration_seconds", -3),
+            ("provider", "paid-unknown"),
+            ("scene_id", ""),
+        ]:
+            q = json.loads(json.dumps(original))
+            q["jobs"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_queue(q)
+
+    def test_rejects_missing_fields_and_duplicate_ids(self):
+        q = build_queue(self.plan)
+        del q["jobs"][0]["prompt"]
+        with self.assertRaises(ValueError):
+            validate_queue(q)
+        q = build_queue(self.plan)
+        q["jobs"][1] = dict(q["jobs"][0])
+        with self.assertRaises(ValueError):
+            validate_queue(q)
+
     def test_no_overwrite(self):
         with TemporaryDirectory() as folder:
             target = Path(folder) / "queue.json"

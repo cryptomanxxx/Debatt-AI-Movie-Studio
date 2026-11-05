@@ -7,6 +7,7 @@ import subprocess
 import shutil
 
 from .core import Scene, budget, plan, save_plan
+from .queue import build_queue, validate_queue, write_queue
 
 
 def assemble(manifest: Path, destination: Path) -> None:
@@ -43,6 +44,12 @@ def main() -> None:
     a = sub.add_parser("assemble")
     a.add_argument("manifest", type=Path)
     a.add_argument("--out", type=Path, required=True)
+    q = sub.add_parser("queue")
+    q.add_argument("plan", type=Path)
+    q.add_argument("--out", type=Path, required=True)
+    q.add_argument("--provider", choices=["unassigned", "ltx-local", "ltx-huggingface-zerogpu"], default="unassigned")
+    v = sub.add_parser("validate-queue")
+    v.add_argument("queue", type=Path)
     args = parser.parse_args()
     if args.command == "plan":
         scenes = plan(args.script.read_text(encoding="utf-8"), args.clip_seconds)
@@ -53,6 +60,14 @@ def main() -> None:
         scenes = [Scene(**s) for s in data["scenes"]]
         print(json.dumps(budget(scenes, args.gpu_seconds_per_video_second,
                                 args.daily_quota_seconds, args.quota_multiplier), indent=2))
+    elif args.command == "queue":
+        data = json.loads(args.plan.read_text(encoding="utf-8"))
+        queue = build_queue(data, provider=args.provider)
+        write_queue(queue, args.out)
+        print(f"Wrote {len(queue['jobs'])} pending, disabled jobs to {args.out}")
+    elif args.command == "validate-queue":
+        data = json.loads(args.queue.read_text(encoding="utf-8"))
+        print(f"Validated {validate_queue(data)} offline jobs")
     else:
         assemble(args.manifest, args.out)
         print(f"Assembled {args.out}")

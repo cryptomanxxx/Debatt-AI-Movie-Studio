@@ -29,3 +29,16 @@ The command refuses to overwrite output files. Store generated videos outside Gi
 - A future provider interface must have explicit opt-in, authentication, budget limits, rate limiting, and persistence before any GPU call.
 - This repository's MIT license covers original code only. LTX weights and generated media are governed by their own applicable terms.
 - Next: characterize real GPU seconds per shot, create a provider-independent job manifest and implement a user-approved GPU connector.
+
+## Milestone 2: offline job queue and temporary artifacts
+
+Create a reproducible queue of pending scenes without calling any provider:
+
+```bash
+python -m movie_studio.cli queue /tmp/movie-plan.json --out /tmp/movie-queue.json
+python -m movie_studio.cli validate-queue /tmp/movie-queue.json
+```
+
+The queue contains deterministic idempotency keys and `generation_enabled: false`. Labels such as `ltx-huggingface-zerogpu` are **metadata only**, not working integrations. There is no authenticated provider client, payment capability or scheduling in this milestone.
+
+The manually triggered **Synthetic video artifact demo** workflow produces a two-second blue test video with a tone using FFmpeg on a standard GitHub Actions runner. It does **not** generate AI video. It uploads the MP4 as a downloadable Actions artifact retained for **seven days**. Trigger it from the Actions tab using *Run workflow*. Artifacts are temporary and subject to GitHub's current retention/storage limits; download anything you wish to keep. Do not commit real MP4s or media credentials to this public repository.

@@ -13,6 +13,8 @@ class Cl19Tests(unittest.TestCase):
         self.assertIn('if peak_rss > 3_000_000_000:', source)
         self.assertIn('torch.cuda.max_memory_allocated(i)', source)
         self.assertIn('child.kill()', source)
+        self.assertIn('"logical_shape": [int(n) for n in value.shape]', source)
+        self.assertIn('"packed_storage_shape": [int(n) for n in value.size()]', source)
         self.assertIn('"comfy_model_constructed": False', source)
         self.assertNotIn('comfy.sd.load_diffusion_model_state_dict(sd,', source)
 

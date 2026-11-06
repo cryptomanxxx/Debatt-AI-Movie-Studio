@@ -18,6 +18,7 @@ SUBMISSION = Path("kaggle-cl7-submission")
 KERNEL_SOURCE = CL6_SOURCE + r'''
 import os
 import shutil
+import time
 from pathlib import Path
 
 sources = Path("/kaggle/working/cl7-sources")

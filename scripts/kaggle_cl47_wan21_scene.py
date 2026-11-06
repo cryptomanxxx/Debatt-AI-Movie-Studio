@@ -1,6 +1,7 @@
-"""CL-47: render one short text-to-video scene with Wan 2.1 T2V 1.3B on Kaggle.
+"""CL-47: render one short text-to-video scene with a Wan model on Kaggle.
 
-GitHub Actions submits a private Kaggle T4 script, polls it, downloads the
+The module is shared by several model profiles: CL-47 (Wan 2.1 T2V 1.3B) and
+CL-48 (Wan 2.2 TI2V 5B, see kaggle_cl48_wan22_scene.py). GitHub Actions submits a private Kaggle T4 script, polls it, downloads the
 MP4 and report, and verifies the MP4 with FFprobe. Nothing is synthetic: if
 the model cannot be installed, loaded or run, the job fails and the Kaggle
 error report is kept as diagnostics.
@@ -12,19 +13,10 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
-SLUG = "debatt-ai-movie-wan21-scene"
-TITLE = "Debatt AI Movie Wan21 Scene"
-MODEL_ID = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
-REPORT_NAME = "wan21-scene.json"
-VIDEO_NAME = "wan21-scene.mp4"
-RESULTS = Path("kaggle-cl47-results")
-SUBMISSION = Path("kaggle-cl47-submission")
-KAGGLE_TIMEOUT_SECONDS = 5400
-MAX_POLLS = 120
 POLL_SECONDS = 60
-FPS = 16
 MAX_VIDEO_BYTES = 250_000_000
 
 # Pinned Python packages installed on top of Kaggle's own CUDA PyTorch.
@@ -38,13 +30,56 @@ PACKAGES = (
     "imageio==2.37.0",
     "imageio-ffmpeg==0.6.0",
 )
-RESOLUTIONS = {"832x480": (480, 832), "480x832": (832, 480), "576x320": (320, 576)}
-FRAME_CHOICES = (17, 33, 49, 81)
-DTYPES = ("float16", "float32")
 DEFAULT_NEGATIVE = (
     "blurry, low quality, distorted, deformed, jpeg artifacts, watermark, text, "
     "subtitles, static image, worst quality"
 )
+
+
+@dataclass(frozen=True)
+class Profile:
+    """Everything that differs between the Wan models rendered on Kaggle."""
+    name: str
+    slug: str
+    title: str
+    model_id: str
+    stem: str
+    results: Path
+    submission: Path
+    fps: int
+    resolutions: dict
+    frame_choices: tuple
+    dtypes: tuple
+    max_steps: int
+    flow_shift: object  # float, or None to keep the model repository's scheduler shift
+    max_latent_tokens: int
+    kaggle_timeout_seconds: int
+    max_polls: int
+
+    @property
+    def report_name(self):
+        return self.stem + ".json"
+
+    @property
+    def video_name(self):
+        return self.stem + ".mp4"
+
+
+WAN21_1_3B = Profile(
+    name="Wan 2.1 T2V 1.3B", slug="debatt-ai-movie-wan21-scene",
+    title="Debatt AI Movie Wan21 Scene", model_id="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+    stem="wan21-scene", results=Path("kaggle-cl47-results"),
+    submission=Path("kaggle-cl47-submission"), fps=16,
+    resolutions={"832x480": (480, 832), "480x832": (832, 480), "576x320": (320, 576)},
+    frame_choices=(17, 33, 49, 81), dtypes=("float16", "float32"), max_steps=40,
+    flow_shift=3.0, max_latent_tokens=40_000, kaggle_timeout_seconds=5400, max_polls=120)
+
+# Backwards-compatible CL-47 names.
+PROFILE = WAN21_1_3B
+SLUG, TITLE, MODEL_ID = PROFILE.slug, PROFILE.title, PROFILE.model_id
+REPORT_NAME, VIDEO_NAME = PROFILE.report_name, PROFILE.video_name
+RESULTS, SUBMISSION, FPS = PROFILE.results, PROFILE.submission, PROFILE.fps
+RESOLUTIONS, FRAME_CHOICES, DTYPES = PROFILE.resolutions, PROFILE.frame_choices, PROFILE.dtypes
 
 KERNEL_SOURCE = r'''import gc
 import json
@@ -109,7 +144,7 @@ def frame_stats(frames, np):
 
 
 def load_pipeline(local, cfg, torch, offload=True):
-    """Load Wan 2.1 from a local snapshot. Shared with offline tests."""
+    """Load a Wan model from a local snapshot. Shared with offline tests."""
     from diffusers import AutoencoderKLWan, UniPCMultistepScheduler, WanPipeline
     from transformers import UMT5EncoderModel
     # T4 has no fast bf16, but UMT5 overflows in fp16; it runs once, so bf16 is fine.
@@ -119,8 +154,9 @@ def load_pipeline(local, cfg, torch, offload=True):
     pipe = WanPipeline.from_pretrained(
         local, text_encoder=text_encoder, vae=vae,
         dtype=getattr(torch, cfg["transformer_dtype"]))
-    pipe.scheduler = UniPCMultistepScheduler.from_config(
-        pipe.scheduler.config, flow_shift=cfg["flow_shift"])
+    if cfg["flow_shift"] is not None:
+        pipe.scheduler = UniPCMultistepScheduler.from_config(
+            pipe.scheduler.config, flow_shift=cfg["flow_shift"])
     if offload:
         pipe.enable_model_cpu_offload()
     return pipe
@@ -235,9 +271,15 @@ if __name__ == "__main__":
 '''
 
 
+def latent_tokens(profile, height, width, num_frames):
+    """Transformer sequence length: Wan VAE compresses time by 4, patches are 2x2."""
+    spatial = 16 if profile.model_id.startswith("Wan-AI/Wan2.2-TI2V") else 8
+    return ((num_frames - 1) // 4 + 1) * (height // spatial // 2) * (width // spatial // 2)
+
+
 def build_config(*, sha, run_id, prompt, seed, resolution, num_frames, steps,
                  guidance_scale, transformer_dtype, revision="main",
-                 negative_prompt=DEFAULT_NEGATIVE):
+                 negative_prompt=DEFAULT_NEGATIVE, profile=WAN21_1_3B):
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("Full Git commit SHA required")
     if not re.fullmatch(r"[0-9]+-[0-9]+", run_id):
@@ -247,27 +289,33 @@ def build_config(*, sha, run_id, prompt, seed, resolution, num_frames, steps,
         raise ValueError("Prompt must be 3-800 characters")
     if not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}", revision):
         raise ValueError("Invalid model revision")
-    if resolution not in RESOLUTIONS:
-        raise ValueError("Resolution must be one of " + ", ".join(RESOLUTIONS))
-    if int(num_frames) not in FRAME_CHOICES:
-        raise ValueError("num_frames must be one of " + str(FRAME_CHOICES))
-    if not 10 <= int(steps) <= 40:
-        raise ValueError("steps must be between 10 and 40")
+    if resolution not in profile.resolutions:
+        raise ValueError("Resolution must be one of " + ", ".join(profile.resolutions))
+    if int(num_frames) not in profile.frame_choices:
+        raise ValueError("num_frames must be one of " + str(profile.frame_choices))
+    if not 10 <= int(steps) <= profile.max_steps:
+        raise ValueError(f"steps must be between 10 and {profile.max_steps}")
     if not 1.0 <= float(guidance_scale) <= 10.0:
         raise ValueError("guidance_scale must be between 1 and 10")
-    if transformer_dtype not in DTYPES:
-        raise ValueError("transformer_dtype must be one of " + str(DTYPES))
+    if transformer_dtype not in profile.dtypes:
+        raise ValueError("transformer_dtype must be one of " + str(profile.dtypes))
     if not 0 <= int(seed) < 2**32:
         raise ValueError("seed must be a 32-bit unsigned integer")
-    height, width = RESOLUTIONS[resolution]
+    height, width = profile.resolutions[resolution]
+    tokens = latent_tokens(profile, height, width, int(num_frames))
+    if tokens > profile.max_latent_tokens:
+        raise ValueError(f"{resolution} with {num_frames} frames is {tokens} latent tokens; "
+                         f"the limit for {profile.name} on a T4 is {profile.max_latent_tokens}. "
+                         "Use fewer frames or a lower resolution.")
     return {
-        "git_sha": sha, "run_id": run_id, "model_id": MODEL_ID, "revision": revision,
+        "git_sha": sha, "run_id": run_id, "model_id": profile.model_id, "revision": revision,
         "prompt": prompt, "negative_prompt": negative_prompt, "seed": int(seed),
-        "height": height, "width": width, "num_frames": int(num_frames), "fps": FPS,
+        "height": height, "width": width, "num_frames": int(num_frames), "fps": profile.fps,
         "steps": int(steps), "guidance_scale": float(guidance_scale),
-        "transformer_dtype": transformer_dtype,
-        "flow_shift": 3.0 if max(height, width) <= 832 else 5.0,
-        "packages": list(PACKAGES), "report_name": REPORT_NAME, "video_name": VIDEO_NAME,
+        "transformer_dtype": transformer_dtype, "latent_tokens": tokens,
+        "flow_shift": profile.flow_shift,
+        "packages": list(PACKAGES), "report_name": profile.report_name,
+        "video_name": profile.video_name,
     }
 
 
@@ -324,23 +372,25 @@ def _execute(args, *, timeout=120):
                           timeout=timeout, check=False)
 
 
-def _download_output(kernel_name):
+def _download_output(kernel_name, results):
     output = _execute(["kaggle", "kernels", "output", kernel_name,
-                       "-p", str(RESULTS), "--force"], timeout=600)
-    (RESULTS / "download.log").write_text(output.stdout, encoding="utf-8")
+                       "-p", str(results), "--force"], timeout=600)
+    (results / "download.log").write_text(output.stdout, encoding="utf-8")
     return output.returncode == 0
 
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__)
+def main(argv=None, profile=WAN21_1_3B, defaults=None):
+    defaults = {"resolution": "832x480", "num_frames": 33, "steps": 25, **(defaults or {})}
+    results, submission = profile.results, profile.submission
+    p = argparse.ArgumentParser(description=f"Render a {profile.name} scene on Kaggle")
     p.add_argument("--sha", required=True)
     p.add_argument("--run-id", required=True)
     p.add_argument("--username", required=True)
     p.add_argument("--prompt", required=True)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--resolution", default="832x480")
-    p.add_argument("--num-frames", type=int, default=33)
-    p.add_argument("--steps", type=int, default=25)
+    p.add_argument("--resolution", default=defaults["resolution"])
+    p.add_argument("--num-frames", type=int, default=defaults["num_frames"])
+    p.add_argument("--steps", type=int, default=defaults["steps"])
     p.add_argument("--guidance-scale", type=float, default=5.0)
     p.add_argument("--transformer-dtype", default="float16")
     p.add_argument("--revision", default="main")
@@ -352,28 +402,28 @@ def main(argv=None):
             sha=args.sha, run_id=args.run_id, prompt=args.prompt, seed=args.seed,
             resolution=args.resolution, num_frames=args.num_frames, steps=args.steps,
             guidance_scale=args.guidance_scale, transformer_dtype=args.transformer_dtype,
-            revision=args.revision)
+            revision=args.revision, profile=profile)
     except ValueError as exc:
         p.error(str(exc))
 
-    shutil.rmtree(RESULTS, ignore_errors=True)
-    RESULTS.mkdir()
-    SUBMISSION.mkdir(exist_ok=True)
-    kernel_name = f"{args.username}/{SLUG}"
-    (SUBMISSION / "run.py").write_text(make_kernel(config), encoding="utf-8")
+    shutil.rmtree(results, ignore_errors=True)
+    results.mkdir()
+    submission.mkdir(exist_ok=True)
+    kernel_name = f"{args.username}/{profile.slug}"
+    (submission / "run.py").write_text(make_kernel(config), encoding="utf-8")
     metadata = {
-        "id": kernel_name, "title": TITLE, "code_file": "run.py", "language": "python",
+        "id": kernel_name, "title": profile.title, "code_file": "run.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": True,
         "enable_internet": True, "machine_shape": "NvidiaTeslaT4",
         "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
         "model_sources": [],
     }
-    (SUBMISSION / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    (submission / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
-    submitted = _execute(["kaggle", "kernels", "push", "-p", str(SUBMISSION),
+    submitted = _execute(["kaggle", "kernels", "push", "-p", str(submission),
                           "--accelerator", "NvidiaTeslaT4",
-                          "--timeout", str(KAGGLE_TIMEOUT_SECONDS)], timeout=180)
-    (RESULTS / "submission.log").write_text(submitted.stdout, encoding="utf-8")
+                          "--timeout", str(profile.kaggle_timeout_seconds)], timeout=180)
+    (results / "submission.log").write_text(submitted.stdout, encoding="utf-8")
     print(submitted.stdout, flush=True)
     if submitted.returncode != 0 or re.search(
             r"(?im)^\s*(kernel push error|error pushing|failed:|traceback)", submitted.stdout):
@@ -382,10 +432,10 @@ def main(argv=None):
         raise RuntimeError("Kaggle CLI did not confirm a new version")
 
     status = None
-    for _ in range(MAX_POLLS):
+    for _ in range(profile.max_polls):
         time.sleep(POLL_SECONDS)
         state = _execute(["kaggle", "kernels", "status", kernel_name], timeout=60)
-        with (RESULTS / "status.log").open("a", encoding="utf-8") as log:
+        with (results / "status.log").open("a", encoding="utf-8") as log:
             log.write(state.stdout + "\n")
         print(state.stdout.strip(), flush=True)
         if state.returncode != 0:
@@ -400,8 +450,8 @@ def main(argv=None):
     else:
         raise RuntimeError("Kaggle render exceeded the bounded polling window")
 
-    downloaded = _download_output(kernel_name)
-    report_path = RESULTS / REPORT_NAME
+    downloaded = _download_output(kernel_name, results)
+    report_path = results / profile.report_name
     report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else None
     if status != "COMPLETE":
         detail = (report or {}).get("error") or "no report returned"
@@ -409,10 +459,10 @@ def main(argv=None):
     if not downloaded or report is None:
         raise RuntimeError("Could not download the Kaggle report")
     validate_report(report, config)
-    video = probe_video(RESULTS / VIDEO_NAME, config)
+    video = probe_video(results / profile.video_name, config)
     report["verified_mp4"] = video
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print("Verified Wan 2.1 scene:", json.dumps(video), flush=True)
+    print(f"Verified {profile.name} scene:", json.dumps(video), flush=True)
     return 0
 
 

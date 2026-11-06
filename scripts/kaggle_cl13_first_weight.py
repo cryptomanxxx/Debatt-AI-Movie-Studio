@@ -4,7 +4,7 @@ from pathlib import Path
 from scripts import kaggle_cl7_import_probe as cl7
 from scripts.kaggle_cl8_dependency_probe import KERNEL_SOURCE as CL8_SOURCE
 
-SLUG = "debatt-ai-movie-cl13-first-weight"
+SLUG = "debatt-ai-movie-cl13-first-q2-weight"
 TITLE = "Debatt AI Movie CL13 First Q2 Weight"
 REPORT_NAME = "cl13-first-weight.json"
 RESULTS = Path("kaggle-cl13-results")

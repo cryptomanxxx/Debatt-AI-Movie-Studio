@@ -4,11 +4,14 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from scripts.kaggle_gguf_probe import (
-    KERNEL_SOURCE, parse_published_kernel, retrieve_diagnostics, validate_report,
+    KERNEL_SOURCE, SLUG, parse_published_kernel, retrieve_diagnostics, validate_report,
 )
 
 
 class KaggleGGUFProbeTests(unittest.TestCase):
+    def test_submission_slug_matches_existing_kaggle_notebook(self):
+        self.assertEqual(SLUG, "debatt-ai-movie-gguf-environment-probe")
+
     def test_kaggle_canonical_url_overrides_requested_id(self):
         output = ("Your kernel title does not resolve to the specified id.\n"
                   "Kernel version 1 successfully pushed. Please check progress at "

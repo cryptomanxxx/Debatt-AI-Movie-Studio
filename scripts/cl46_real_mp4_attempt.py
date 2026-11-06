@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -19,14 +20,26 @@ CONFIRM = "QUEUE_REAL_LTX25_VIDEO"
 MAX_VIDEO_BYTES = 250_000_000
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+LOCAL_HTTP = urllib.request.build_opener(NoRedirect)
+
+
 def _request(base, endpoint, *, payload=None, timeout=15):
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         base + endpoint, data=data,
         headers={"Content-Type": "application/json"} if data is not None else {},
         method="POST" if data is not None else "GET")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read(5_000_000).decode("utf-8"))
+    try:
+        with LOCAL_HTTP.open(request, timeout=timeout) as response:
+            return json.loads(response.read(5_000_000).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(50_000).decode("utf-8", errors="replace")
+        raise RuntimeError(f"ComfyUI HTTP {exc.code}: {detail}") from exc
 
 
 def probe(comfy_root, base, *, client=_request):
@@ -65,7 +78,7 @@ def find_video(history_entry):
 
 def attempt(comfy_root, workflow_path, output_path, *, base, confirm,
             timeout_seconds=1800, client=_request, downloader=None,
-            clock=time.monotonic, pause=time.sleep):
+            clock=time.monotonic, pause=time.sleep, progress=None):
     if confirm != CONFIRM:
         raise ValueError("Explicit real-GPU queue confirmation required")
     readiness = probe(comfy_root, base, client=client)
@@ -86,11 +99,22 @@ def attempt(comfy_root, workflow_path, output_path, *, base, confirm,
     prompt_id = queued.get("prompt_id") if isinstance(queued, dict) else None
     if not isinstance(prompt_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", prompt_id):
         raise RuntimeError("ComfyUI rejected graph: " + str(queued)[:1500])
+    if progress:
+        progress({"status": "queued", "prompt_id": prompt_id,
+                  "gpu_queue_submitted": True, "video_generated": False})
     deadline = clock() + timeout_seconds
     while clock() < deadline:
         history = client(base, "/history/" + prompt_id)
         entry = history.get(prompt_id) if isinstance(history, dict) else None
         if entry:
+            status = entry.get("status", {})
+            if not isinstance(status, dict):
+                raise RuntimeError("ComfyUI returned invalid execution status: " + prompt_id)
+            if status.get("status_str") == "error" or status.get("completed") is False:
+                detail = json.dumps(status.get("messages", []), ensure_ascii=False)[:2000]
+                raise RuntimeError("ComfyUI execution failed: " + detail)
+            if status.get("status_str") != "success" or status.get("completed") is not True:
+                raise RuntimeError("ComfyUI history lacks confirmed success: " + prompt_id)
             video = find_video(entry)
             if not video:
                 raise RuntimeError("ComfyUI completed but produced no output MP4: " + prompt_id)
@@ -115,7 +139,7 @@ def download_video(base, descriptor, output_path):
     temporary = output_path.with_suffix(output_path.suffix + ".part")
     size = 0
     try:
-        with urllib.request.urlopen(base + "/view?" + query, timeout=60) as response, temporary.open("wb") as file:
+        with LOCAL_HTTP.open(base + "/view?" + query, timeout=60) as response, temporary.open("wb") as file:
             while chunk := response.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_VIDEO_BYTES:
@@ -127,6 +151,19 @@ def download_video(base, descriptor, output_path):
             header = file.read(32)
         if b"ftyp" not in header[4:16]:
             raise ValueError("Output is not an MP4 container")
+        if not shutil.which("ffprobe"):
+            raise RuntimeError("FFprobe required to verify video frames")
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-count_frames", "-show_entries",
+             "stream=codec_type,width,height,nb_read_frames", "-of", "json", str(temporary)],
+            capture_output=True, text=True, timeout=30, check=False)
+        if result.returncode:
+            raise ValueError("FFprobe rejected MP4: " + result.stderr[:400])
+        streams = json.loads(result.stdout).get("streams", [])
+        if not any(s.get("codec_type") == "video" and s.get("width", 0) > 0
+                   and s.get("height", 0) > 0
+                   and int(s.get("nb_read_frames") or 0) > 0 for s in streams):
+            raise ValueError("MP4 lacks decodable video frames")
         temporary.replace(output_path)
         return size
     finally:
@@ -144,15 +181,24 @@ def main(argv=None):
     parser.add_argument("--submit", action="store_true")
     parser.add_argument("--confirm")
     args = parser.parse_args(argv)
-    if args.submit:
-        if not args.workflow:
-            parser.error("--submit requires --workflow")
-        report = attempt(args.comfy_root, args.workflow, args.output,
-                         base=args.base, confirm=args.confirm)
-    else:
-        report = probe(args.comfy_root, args.base)
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    def record(report):
+        args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    record({"status": "starting", "video_generated": False})
+    try:
+        if args.submit:
+            if not args.workflow:
+                parser.error("--submit requires --workflow")
+            report = attempt(args.comfy_root, args.workflow, args.output,
+                             base=args.base, confirm=args.confirm, progress=record)
+        else:
+            report = probe(args.comfy_root, args.base)
+    except Exception as exc:
+        previous = json.loads(args.report.read_text(encoding="utf-8"))
+        record({**previous, "status": "failed", "video_generated": False,
+                "error": str(exc)[:2000]})
+        raise
+    record(report)
     print(json.dumps(report, indent=2))
 
 

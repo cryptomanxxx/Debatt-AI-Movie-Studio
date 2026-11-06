@@ -4,7 +4,7 @@ This is the last setup PR before CL-46's **real MP4 generation attempt**. CL-45 
 
 1. Install the real ComfyUI runtime with the official LTX nodes. Use CL-44 to download and SHA-verify the official LTX-2.5 INT8 ConvRot transformer and Gemma 4 text encoder, BF16 Conv video VAE, and BF16 audio VAE. Use substantial disk space and appropriate GPU hardware; compatibility with Kaggle's T4 is **not** established.
 2. In ComfyUI, select the `video_ltx2_5_flf2v` official First/Last Frame template. Export **API-format** JSON (not the regular UI graph). This requires a real installed workflow; CL-45 does not claim to embed or reconstruct its topology.
-3. Copy two real image files to `ComfyUI/input/start.png` and `ComfyUI/input/end.png` and inspect the exported JSON for node IDs. Identify the four model loader nodes and their input selectors (`unet_name`, `clip_name`, `vae_name`, `vae_name`), two `LoadImage` nodes, and the prompt `text` node.
+3. Copy two real image files to `ComfyUI/input/start.png` and `ComfyUI/input/end.png` and inspect the exported JSON for node IDs. IDs such as `251:229` from flattened ComfyUI subgraphs are supported. Identify the four model loader nodes and their input selectors (`unet_name`, `clip_name`, `vae_name`, `vae_name`), two `LoadImage` nodes, and the prompt `text` node. The API graph must contain `SaveVideo` with a nonempty `filename_prefix` or `VHS_VideoCombine` with a nonempty `filename_prefix` and an MP4 `format`; saving a still image is not a video result.
 4. From this repo run:
 
 ```bash

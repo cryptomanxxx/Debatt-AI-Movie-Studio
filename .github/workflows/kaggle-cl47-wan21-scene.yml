@@ -1,0 +1,121 @@
+name: Kaggle CL-47 Wan 2.1 Scene (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_gpu_use:
+        description: "Type YES to consume Kaggle T4 quota"
+        required: true
+        type: string
+      confirm_model_download:
+        description: "Type YES_DOWNLOAD_WAN21_1_3B to download Wan 2.1 T2V 1.3B on Kaggle"
+        required: true
+        type: string
+      prompt:
+        description: "Scene description (English works best, max 800 characters)"
+        required: true
+        type: string
+        default: "Two people debate passionately on a dimly lit TV studio stage, cinematic lighting, slow camera push-in"
+      num_frames:
+        description: "Frames at 16 fps (17 = 1 s, 33 = 2 s, 49 = 3 s, 81 = 5 s)"
+        required: true
+        type: choice
+        default: "33"
+        options: ["17", "33", "49", "81"]
+      resolution:
+        description: "Width x height (576x320 is a fast draft)"
+        required: true
+        type: choice
+        default: "832x480"
+        options: ["832x480", "480x832", "576x320"]
+      steps:
+        description: "Denoising steps (10-40)"
+        required: true
+        type: string
+        default: "25"
+      seed:
+        description: "Random seed"
+        required: true
+        type: string
+        default: "42"
+      transformer_dtype:
+        description: "float16 is faster; try float32 if the frames come out black"
+        required: true
+        type: choice
+        default: "float16"
+        options: ["float16", "float32"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: movie-studio-kaggle-gpu
+  cancel-in-progress: false
+
+jobs:
+  render:
+    if: ${{ inputs.confirm_gpu_use == 'YES' && inputs.confirm_model_download == 'YES_DOWNLOAD_WAN21_1_3B' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      EXPERIMENT_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      SCENE_PROMPT: ${{ inputs.prompt }}
+      SCENE_FRAMES: ${{ inputs.num_frames }}
+      SCENE_RESOLUTION: ${{ inputs.resolution }}
+      SCENE_STEPS: ${{ inputs.steps }}
+      SCENE_SEED: ${{ inputs.seed }}
+      SCENE_DTYPE: ${{ inputs.transformer_dtype }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run CL-47 offline tests before submission
+        run: |
+          python -m pip install 'numpy>=1.26,<3'
+          python -m unittest tests.test_kaggle_cl47_wan21_scene -v
+      - name: Require Kaggle credentials
+        run: |
+          test -n "$KAGGLE_USERNAME" || { echo "::error::Missing KAGGLE_USERNAME"; exit 1; }
+          test -n "$KAGGLE_API_TOKEN" || { echo "::error::Missing KAGGLE_API_TOKEN"; exit 1; }
+      - name: Install Kaggle CLI and FFmpeg
+        run: |
+          python -m pip install 'kaggle>=2.2,<3' 'six>=1.16,<2'
+          command -v ffprobe || { sudo apt-get update -q && sudo apt-get install -y -q ffmpeg; }
+      - name: Render scene on Kaggle T4
+        run: >-
+          python -m scripts.kaggle_cl47_wan21_scene
+          --sha "$GITHUB_SHA" --run-id "$EXPERIMENT_RUN_ID" --username "$KAGGLE_USERNAME"
+          --prompt "$SCENE_PROMPT" --num-frames "$SCENE_FRAMES" --resolution "$SCENE_RESOLUTION"
+          --steps "$SCENE_STEPS" --seed "$SCENE_SEED" --transformer-dtype "$SCENE_DTYPE"
+      - name: Add silent audio track for clip assembly
+        run: |
+          ffmpeg -hide_banner -loglevel error -i kaggle-cl47-results/wan21-scene.mp4 \
+            -f lavfi -i anullsrc=r=48000:cl=stereo -shortest -c:v copy -c:a aac \
+            kaggle-cl47-results/wan21-scene-with-silent-audio.mp4
+      - name: Publish summary
+        if: always()
+        run: |
+          python - <<'EOF'
+          import json, os, pathlib
+          path = pathlib.Path("kaggle-cl47-results/wan21-scene.json")
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8")
+          out.write("## CL-47 Wan 2.1 scene\n\n")
+          if not path.is_file():
+              out.write("No report was returned from Kaggle. See the diagnostics artifact.\n")
+          else:
+              report = json.loads(path.read_text(encoding="utf-8"))
+              report.pop("traceback", None)
+              status = "rendered and verified" if report.get("verified_mp4") else "failed"
+              out.write(f"**Result:** {status}\n\n```json\n{json.dumps(report, indent=2)}\n```\n")
+          EOF
+      - name: Upload scene and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: movie-studio-cl47-wan21-scene-${{ github.run_id }}
+          path: kaggle-cl47-results/
+          retention-days: 7
+          if-no-files-found: warn

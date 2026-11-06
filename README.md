@@ -42,3 +42,7 @@ python -m movie_studio.cli validate-queue /tmp/movie-queue.json
 The queue contains deterministic idempotency keys and `generation_enabled: false`. Labels such as `ltx-huggingface-zerogpu` are **metadata only**, not working integrations. There is no authenticated provider client, payment capability or scheduling in this milestone.
 
 The manually triggered **Synthetic video artifact demo** workflow produces a two-second blue test video with a tone using FFmpeg on a standard GitHub Actions runner. It does **not** generate AI video. It uploads the MP4 as a downloadable Actions artifact retained for **seven days**. Trigger it from the Actions tab using *Run workflow*. Artifacts are temporary and subject to GitHub's current retention/storage limits; download anything you wish to keep. Do not commit real MP4s or media credentials to this public repository.
+
+## CL-47: first real AI scene (Wan 2.1 on Kaggle)
+
+**Actions → Kaggle CL-47 Wan 2.1 Scene (manual)** renders a short text-to-video clip (1–5 s, 480p, no sound) with the open-weight Wan 2.1 T2V 1.3B model on a private Kaggle T4. The MP4 is verified with FFprobe and uploaded as a 7-day Actions artifact, together with a copy that has a silent audio track for `assemble`. See [docs/kaggle-cl47-wan21-scene.md](docs/kaggle-cl47-wan21-scene.md). The workflow has not yet been run on real Kaggle hardware.

@@ -18,7 +18,8 @@ _INSERT = '''            del cpu_whole
 
 _MATVEC = '''            # First bounded *arithmetic* with real dequantized LTX weights.
             # Synthetic vector only; this is NOT a valid LTX forward pass.
-            dims = tuple(int(d) for d in whole_source.shape)
+            # GGUF ReaderTensor.shape is in GGML order, opposite NumPy/PyTorch.
+            dims = tuple(int(d) for d in reversed(whole_source.shape))
             if (len(dims) != 2 or min(dims) < 2 or max(dims) > 8192
                     or dims[0] * dims[1] != cpu_whole.numel()):
                 raise ValueError("Selected Q2_K tensor is not a bounded 2-D matrix")

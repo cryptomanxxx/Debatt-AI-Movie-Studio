@@ -65,13 +65,30 @@ The stack trace ends in `AutoencoderKLWan` → `up_block` → `upsampler` → `c
 - For frames larger than 832x480 the pipeline enables **VAE tiling** (`vae.enable_tiling()`, diffusers' default 256 px tiles with 64 px overlap), so the decoder works on spatial tiles. 832x480 and smaller keep the proven full-frame decode, so the CL-47 and CL-48 480p results are unaffected.
 - A `vae_decode` progress line is logged after the last step, and the report records `vae_tiling`.
 
-Tiling can produce faint seams. The overlap blending is designed to hide them, but a visual check of the next 720p clip is needed.
+### 720p re-run with the fix: success
+
+[Run 42247737170](https://github.com/cryptomanxxx/Debatt-AI-Movie-Studio/actions/runs/42247737170), on the same settings with tiling enabled, rendered and verified the first 720p scene.
+
+| Phase | 480p (832x480) | 720p (1280x704, tiled decode) |
+| --- | --- | --- |
+| Latent tokens | 5,070 | 11,440 |
+| Time per denoising step | ~8.3 s | **~22.0 s** |
+| VAE decode + export | ~164 s (full frame) | **~553 s (~9.2 min, tiled)** |
+| Generation total | 479 s | 1,270 s |
+| Total Kaggle script | 767 s (~12.8 min) | 1,564 s (~26 min) |
+| Peak VRAM | 13.1 GB | **12.4 GB** |
+
+**Output:** an H.264 MP4 at 1280x704 with 49 frames (2.04 s), 262 KB. FFprobe verified it, and all frames were finite.
+
+**Visual check:** this is the best clip so far. A man and a woman stand at two podiums with microphones in a bright studio, as the prompt asked. Both gesture, they turn towards each other, and the camera moves slightly. No tile seams are visible. Measured mean edge strength at the 192 px tile boundaries is within the range of the rest of the image, and the strongest edges are real objects such as the podium edges.
+
+**Trade-off:** the tiled decode decodes each tile frame by frame, so it now takes longer than the 30 denoising steps. Larger tiles (fewer, bigger decodes) or decoding on the unused second T4 are possible future speed-ups.
 
 ## Offline verification
 
 - Unit tests cover profile isolation, geometry (multiples of 32, valid frame counts), the token budget, input bounds, and that CL-47's configuration is unchanged.
 - The kernel's `load_pipeline` and `render` also ran on a CPU against a tiny, randomly initialised Wan 2.2 TI2V-shaped pipeline (48-channel residual VAE with 16× compression, `expand_timesteps=True`).
-- **Not yet measured:** clips longer than 2 seconds.
+- **Not yet measured:** clips longer than 2 seconds, and 720p in portrait (704x1280).
 
 ## Possible next optimisation
 

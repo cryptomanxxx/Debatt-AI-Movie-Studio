@@ -26,7 +26,7 @@ for name, layer in root.named_modules():
         continue
     shape = tuple(int(n) for n in weight.shape)
     if (len(shape) == 2 and 1 < shape[0] <= 8192
-            and 1 < shape[1] <= 8192 and weight.numel() <= 8_000_000
+            and 1 < shape[1] <= 8192 and shape[0] * shape[1] <= 8_000_000
             and weight.tensor_type not in (gguf.GGMLQuantizationType.F32,
                                            gguf.GGMLQuantizationType.F16)):
         candidates.append((name, layer, shape))

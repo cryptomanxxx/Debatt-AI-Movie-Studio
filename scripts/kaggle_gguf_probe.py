@@ -10,8 +10,11 @@ from scripts.kaggle_gpu_probe import execute, MAX_POLLS, POLL_SECONDS
 
 import time
 
-SLUG = "debatt-ai-movie-gguf-probe"
-EXPECTED_PUBLISHED_SLUGS = {SLUG, "debatt-ai-movie-gguf-environment-probe"}
+# Kaggle derives the notebook slug from the title when creating it. The
+# initially published notebook from run 42133270562 has this canonical slug.
+# Use it for *both* submission and status polling to avoid 409 conflicts.
+SLUG = "debatt-ai-movie-gguf-environment-probe"
+EXPECTED_PUBLISHED_SLUGS = {SLUG}
 RESULTS = Path("kaggle-gguf-results")
 SUBMISSION = Path("kaggle-gguf-submission")
 

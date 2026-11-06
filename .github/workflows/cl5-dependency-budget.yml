@@ -1,0 +1,31 @@
+name: CL-5 LTX Dependency Size Estimate (metadata only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  estimate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install tiny metadata parser only
+        run: python -m pip install 'packaging>=24,<27'
+      - name: Unit tests
+        run: python -m unittest discover -s tests -p 'test_cl5_dependency_budget.py' -v
+      - name: Fetch PyPI metadata and estimate direct wheel size only
+        run: python -m scripts.cl5_dependency_budget --output preflight/cl5-dependency-budget.json
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cl5-dependency-budget-${{ github.run_id }}
+          path: preflight/cl5-dependency-budget.json
+          retention-days: 7
+          if-no-files-found: warn

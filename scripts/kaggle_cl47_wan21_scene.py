@@ -30,6 +30,7 @@ PACKAGES = (
     "imageio==2.37.0",
     "imageio-ffmpeg==0.6.0",
 )
+VAE_TILING_ABOVE_PIXELS = 832 * 480
 DEFAULT_NEGATIVE = (
     "blurry, low quality, distorted, deformed, jpeg artifacts, watermark, text, "
     "subtitles, static image, worst quality"
@@ -89,6 +90,10 @@ import subprocess
 import sys
 import time
 import traceback
+
+# Must be set before torch initialises CUDA. Reduces fragmentation: the first
+# 720p attempt failed with 2.8 GiB reserved-but-unallocated during VAE decode.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 CONFIG = json.loads(__CONFIG_JSON__)
 WORK = "/kaggle/working"
@@ -157,6 +162,9 @@ def load_pipeline(local, cfg, torch, offload=True):
     if cfg["flow_shift"] is not None:
         pipe.scheduler = UniPCMultistepScheduler.from_config(
             pipe.scheduler.config, flow_shift=cfg["flow_shift"])
+    if cfg.get("vae_tiling"):
+        # Decode in overlapping spatial tiles; full-frame 720p decode ran out of memory.
+        pipe.vae.enable_tiling(**cfg.get("vae_tile_kwargs", {}))
     if offload:
         pipe.enable_model_cpu_offload()
     return pipe
@@ -168,6 +176,8 @@ def render(pipe, cfg, torch, np, export_to_video, video_path):
 
     def on_step(_pipe, step, _timestep, callback_kwargs):
         progress("denoise", step=step + 1, total=total)
+        if step + 1 == total:
+            progress("vae_decode", tiling=bool(cfg.get("vae_tiling")))
         return callback_kwargs
 
     generator = torch.Generator(device="cpu").manual_seed(cfg["seed"])
@@ -204,7 +214,7 @@ def main():
         "model_id": CONFIG["model_id"], "requested_revision": CONFIG["revision"],
         "settings": {key: CONFIG[key] for key in (
             "prompt", "negative_prompt", "seed", "height", "width", "num_frames",
-            "fps", "steps", "guidance_scale", "transformer_dtype")},
+            "fps", "steps", "guidance_scale", "transformer_dtype", "vae_tiling")},
         "packages": CONFIG["packages"], "video_generated": False, "error": None,
     }
     try:
@@ -314,6 +324,8 @@ def build_config(*, sha, run_id, prompt, seed, resolution, num_frames, steps,
         "steps": int(steps), "guidance_scale": float(guidance_scale),
         "transformer_dtype": transformer_dtype, "latent_tokens": tokens,
         "flow_shift": profile.flow_shift,
+        # Full-frame decode is proven up to 832x480 (CL-47, CL-48); tile anything larger.
+        "vae_tiling": height * width > VAE_TILING_ABOVE_PIXELS,
         "packages": list(PACKAGES), "report_name": profile.report_name,
         "video_name": profile.video_name,
     }

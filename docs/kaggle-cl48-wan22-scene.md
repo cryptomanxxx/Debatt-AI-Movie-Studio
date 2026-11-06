@@ -51,11 +51,27 @@ The larger model is faster per step because Wan 2.2's 16× VAE gives the transfo
 
 **Visual check:** this is clearly better than CL-47. It shows exactly two people, a man and a woman, in a medium shot at a desk in a bright, colourful studio. There is real motion: the woman gestures with both hands and the man turns towards her. The mean absolute frame difference was 0.008, twice CL-47's 0.004, and frame contrast was much higher (std 0.37 against 0.10). Remaining flaws: a blurred pseudo-text logo in the background, and the requested camera pan is barely visible.
 
+## First 720p attempt (2026-11-06): out of memory in VAE decode
+
+[Run 42243475639](https://github.com/cryptomanxxx/Debatt-AI-Movie-Studio/actions/runs/42243475639) used the same prompt and seed at **1280x704**, 49 frames and 30 steps. All 30 denoising steps completed at **~22.4 s per step** (11,440 tokens), but the job then failed in the **VAE decode**:
+
+`torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.72 GiB ... 10.86 GiB is allocated by PyTorch, and 2.81 GiB is reserved by PyTorch but unallocated.`
+
+The stack trace ends in `AutoencoderKLWan` → `up_block` → `upsampler` → `conv2d`. The fp32 full-frame decode at 720p needs more than the ~14.5 GiB usable on a T4, and fragmentation left 2.8 GiB unusable. The whole Kaggle script took 1,085 s. No video was published, and the failure report was kept.
+
+**Fix:**
+
+- The kernel sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` before torch is imported, which reduces fragmentation.
+- For frames larger than 832x480 the pipeline enables **VAE tiling** (`vae.enable_tiling()`, diffusers' default 256 px tiles with 64 px overlap), so the decoder works on spatial tiles. 832x480 and smaller keep the proven full-frame decode, so the CL-47 and CL-48 480p results are unaffected.
+- A `vae_decode` progress line is logged after the last step, and the report records `vae_tiling`.
+
+Tiling can produce faint seams. The overlap blending is designed to hide them, but a visual check of the next 720p clip is needed.
+
 ## Offline verification
 
 - Unit tests cover profile isolation, geometry (multiples of 32, valid frame counts), the token budget, input bounds, and that CL-47's configuration is unchanged.
 - The kernel's `load_pipeline` and `render` also ran on a CPU against a tiny, randomly initialised Wan 2.2 TI2V-shaped pipeline (48-channel residual VAE with 16× compression, `expand_timesteps=True`).
-- **Not yet measured:** 720p (1280x704) and clips longer than 2 seconds. VAE decode memory is the main risk at 720p.
+- **Not yet measured:** clips longer than 2 seconds.
 
 ## Possible next optimisation
 

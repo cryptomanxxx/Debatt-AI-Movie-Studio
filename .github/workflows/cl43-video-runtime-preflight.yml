@@ -1,0 +1,27 @@
+name: CL-43 Video Runtime Preflight (CPU only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test preflight without weights
+        run: python -m unittest discover -s tests -q
+      - name: Record missing runtime assets explicitly
+        run: python -m scripts.cl43_video_runtime_preflight --comfy-root ./ComfyUI --output cl43-results/report.json
+      - name: Upload readiness diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: cl43-video-runtime-preflight
+          path: cl43-results/report.json
+          retention-days: 7

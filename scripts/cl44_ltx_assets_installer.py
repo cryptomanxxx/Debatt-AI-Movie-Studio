@@ -71,9 +71,31 @@ def install(comfy_root, revision, confirm, *, api=None, download=None):
             missing_total += size
     if required_total > MAX_TOTAL_BYTES:
         raise ValueError("Model stack exceeds configured disk budget")
-    available = shutil.disk_usage(root).free
-    if available < missing_total + EXTRA_FREE_BYTES:
-        raise ValueError("Not enough free space for model stack plus safety margin")
+    # local_dir stores Hub transfer metadata and staging files below models/.
+    # Asset directories may be independent mounts or symlinks: budget each
+    # actual destination device, not merely the ComfyUI installation device.
+    models = root / "models"
+    models.mkdir(parents=True, exist_ok=True)
+    device_paths = {models.stat().st_dev: models}
+    pending_by_device = {}
+    for item in manifest:
+        if item["already_verified"]:
+            continue
+        destination = Path(item["destination"])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        actual_parent = destination.parent.resolve()
+        device = actual_parent.stat().st_dev
+        device_paths.setdefault(device, actual_parent)
+        pending_by_device[device] = pending_by_device.get(device, 0) + item["expected_size_bytes"]
+    for device, path in device_paths.items():
+        # On a different destination mount, Hub staging still needs room for
+        # the largest single transfer on the models filesystem.
+        pending = pending_by_device.get(device, 0)
+        if device == models.stat().st_dev and missing_total > pending:
+            pending += max((item["expected_size_bytes"] for item in manifest
+                            if not item["already_verified"]), default=0)
+        if shutil.disk_usage(path).free < pending + EXTRA_FREE_BYTES:
+            raise ValueError("Not enough free space on actual model destination or staging filesystem")
 
     completed = []
     for item in manifest:
@@ -83,8 +105,10 @@ def install(comfy_root, revision, confirm, *, api=None, download=None):
             continue
         # The Hub library handles resumable transfer and cache bookkeeping.
         # Never log access tokens or write credentials into the report.
+        # Invalidate stale Hub local_dir metadata as well: a previous
+        # size-correct but SHA-invalid file must never be reused on retry.
         download(repo_id=REPOSITORY, filename=item["repository_path"],
-                 revision=revision, local_dir=str(root / "models"))
+                 revision=revision, local_dir=str(models), force_download=True)
         if (not destination.is_file()
                 or destination.stat().st_size != item["expected_size_bytes"]
                 or _hash_file(destination) != item["expected_sha256"]):

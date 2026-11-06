@@ -18,6 +18,11 @@ class GPUTensorSampleTest(unittest.TestCase):
         self.assertIn("signal.setitimer(signal.ITIMER_REAL, 720)", source)
         self.assertIn('Path("/kaggle/temp")', source)
         self.assertIn("stage.unlink()", source)
+        # All mmap-backed views are cleared in the GGUF reader's finally clause.
+        self.assertIn("            sample = None\n            candidates = None", source)
+        self.assertIn("            cpu_sample = None\n            sample_bytes = None", source)
+        self.assertLess(source.index("            candidates = None"),
+                        source.index("            del reader"))
         self.assertIn('report["ltx_loaded"] = False', source)
         self.assertIn('report["video_generated"] = False', source)
 

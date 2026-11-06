@@ -45,4 +45,4 @@ The manually triggered **Synthetic video artifact demo** workflow produces a two
 
 ## CL-47: first real AI scene (Wan 2.1 on Kaggle)
 
-**Actions → Kaggle CL-47 Wan 2.1 Scene (manual)** renders a short text-to-video clip (1–5 s, 480p, no sound) with the open-weight Wan 2.1 T2V 1.3B model on a private Kaggle T4. The MP4 is verified with FFprobe and uploaded as a 7-day Actions artifact, together with a copy that has a silent audio track for `assemble`. See [docs/kaggle-cl47-wan21-scene.md](docs/kaggle-cl47-wan21-scene.md). The workflow has not yet been run on real Kaggle hardware.
+**Actions → Kaggle CL-47 Wan 2.1 Scene (manual)** renders a short text-to-video clip (1–5 s, 480p, no sound) with the open-weight Wan 2.1 T2V 1.3B model on a private Kaggle T4. The MP4 is verified with FFprobe and uploaded as a 7-day Actions artifact, together with a copy that has a silent audio track for `assemble`. See [docs/kaggle-cl47-wan21-scene.md](docs/kaggle-cl47-wan21-scene.md). The first real run (2026-11-06) produced a verified 2-second 832x480 clip in about 11 minutes of Kaggle time (6.2 minutes of generation, 11.7 GB peak VRAM).

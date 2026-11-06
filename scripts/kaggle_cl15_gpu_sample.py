@@ -14,6 +14,17 @@ _MARKER = '''        finally:
             del reader
             gc.collect()
 '''
+_RELEASE_VIEWS = '''        finally:
+            # These module-scope references otherwise retain GGUF mmap views.
+            # Drop them on EVERY exit path, including CUDA failures.
+            sample = None
+            candidates = None
+            cpu_sample = None
+            sample_bytes = None
+            gpu_sample = None
+            del reader
+            gc.collect()
+'''
 _GPU_SAMPLE = '''            # Copy <=4 MiB of one raw, packed GGUF tensor onto EACH T4.
             # No dequantization, model layers, inference, or optimizer state.
             import numpy as np
@@ -71,7 +82,7 @@ _GPU_SAMPLE = '''            # Copy <=4 MiB of one raw, packed GGUF tensor onto 
 def make_kernel():
     source = CL14_SOURCE
     assert source.count(_MARKER) == 1
-    source = source.replace(_MARKER, _GPU_SAMPLE + _MARKER)
+    source = source.replace(_MARKER, _GPU_SAMPLE + _RELEASE_VIEWS)
     for old, new in (
         ("cl14-sources", "cl15-sources"),
         ('"cl14_checks"', '"cl15_checks"'),

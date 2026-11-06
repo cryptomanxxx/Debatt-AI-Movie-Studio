@@ -29,7 +29,12 @@ _ROPE_BLOCK = CL24B_BLOCK.replace(
     '    # Four distinct synthetic (frame, y, x) coordinates; 25 fps for video time.\n'
     '    coords = torch.tensor([[[0, 0, 1, 1], [0, 1, 0, 1], [0, 0, 1, 1]]],\n'
     '                          device="cuda:0", dtype=torch.float32)\n'
-    '    pe = root._prepare_positional_embeddings(coords, frame_rate=25, x_dtype=torch.float16)\n'
+    '    # Explicit base video implementation: LTXAVModel overrides this method for AV pairs.\n'
+    '    from comfy.ldm.lightricks.model import LTXBaseModel\n'
+    '    if not isinstance(root, LTXBaseModel):\n'
+    '        raise RuntimeError("Unexpected LTX root type for video RoPE")\n'
+    '    pe = LTXBaseModel._prepare_positional_embeddings(\n'
+    '        root, coords, frame_rate=25, x_dtype=torch.float16)\n'
     '    if not (isinstance(pe, tuple) and len(pe) == 2\n'
     '            and torch.is_tensor(pe[0]) and pe[0].shape[0:3] == (1, 4, block.attn1.heads)\n'
     '            and torch.isfinite(pe[0]).all().item()):\n'
@@ -54,6 +59,7 @@ _ROPE_BLOCK = CL24B_BLOCK.replace(
 assert _ROPE_BLOCK != CL24B_BLOCK
 assert 'v_pe=pe' in _ROPE_BLOCK
 assert '_prepare_positional_embeddings' in _ROPE_BLOCK
+assert 'LTXBaseModel._prepare_positional_embeddings(' in _ROPE_BLOCK
 
 
 def make_kernel():

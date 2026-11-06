@@ -259,6 +259,11 @@ def upscale_frames(frames, cfg, torch, np, model, device, dtype):
     return out
 
 
+def export_exact(frames, video_path, fps, export_to_video):
+    """Export without imageio's default macro_block_size=16, which pads 1080 to 1088."""
+    export_to_video(frames, video_path, fps=fps, macro_block_size=1)
+
+
 def run_upscale(frames, cfg, torch, np, export_to_video, video_path):
     import hashlib
     import urllib.request
@@ -278,7 +283,7 @@ def run_upscale(frames, cfg, torch, np, export_to_video, video_path):
     torch.cuda.reset_peak_memory_stats()
     upscaled = upscale_frames(frames, cfg, torch, np, model, device, torch.float16)
     stats = frame_stats(upscaled, np)
-    export_to_video(upscaled, video_path, fps=cfg["fps"])
+    export_exact(upscaled, video_path, cfg["fps"], export_to_video)
     if not os.path.isfile(video_path) or os.path.getsize(video_path) < 1000:
         raise RuntimeError("Upscaled MP4 export produced no usable file")
     return {"model": up["model"], "seconds": round(time.time() - started, 1),

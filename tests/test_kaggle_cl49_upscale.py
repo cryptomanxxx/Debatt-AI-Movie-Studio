@@ -84,6 +84,29 @@ class Cl49KernelTests(unittest.TestCase):
         out = ns["upscale_frames"](frames, cfg, torch, np, double, torch.device("cpu"), torch.float32)
         self.assertEqual((len(out), out[0].shape), (3, (54, 96, 3)))
 
+    def test_upscaled_export_keeps_exact_1080_height(self):
+        source = cl47.make_kernel(config())
+        self.assertIn("export_exact(upscaled, video_path", source)
+        self.assertIn("macro_block_size=1", source)
+        try:
+            import numpy as np
+            from diffusers.utils import export_to_video
+        except ImportError:
+            self.skipTest("diffusers/imageio not installed in this environment")
+        import shutil
+        if not shutil.which("ffprobe"):
+            self.skipTest("ffprobe not installed")
+        ns = self.kernel(config())
+        frames = [np.random.default_rng(i).random((1080, 1920, 3), dtype=np.float32) for i in range(3)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "exact.mp4")
+            ns["export_exact"](frames, path, 24, export_to_video)
+            out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                  "-show_entries", "stream=width,height", "-of", "json", path],
+                                 capture_output=True, text=True, check=True).stdout
+            stream = json.loads(out)["streams"][0]
+            self.assertEqual((stream["width"], stream["height"]), (1920, 1080))
+
 
 class Cl49VerificationTests(unittest.TestCase):
     def test_upscaled_video_probed_at_target_size(self):

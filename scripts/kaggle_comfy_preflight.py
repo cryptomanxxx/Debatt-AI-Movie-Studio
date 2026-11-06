@@ -14,7 +14,8 @@ TITLE = "Debatt AI Movie ComfyUI Preflight"
 RESULTS = Path("kaggle-comfy-results")
 SUBMISSION = Path("kaggle-comfy-submission")
 
-KERNEL_SOURCE = r'''import importlib.metadata
+KERNEL_SOURCE = r'''import atexit
+import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -33,8 +34,19 @@ repos = {
 }
 MIN_DISK_AFTER_SOURCE_BYTES = 19_000_000_000
 results = {}
+created_dirs = []
+def clean_generated_sources():
+    # Only directories validated as absent before this probe created them.
+    for directory in created_dirs:
+        if directory.is_dir():
+            shutil.rmtree(directory)
+
+atexit.register(clean_generated_sources)
 for key, (url, directory) in repos.items():
     dest = work / directory
+    if dest.exists():
+        raise RuntimeError("Source folder already exists; refusing to overwrite")
+    created_dirs.append(dest)
     clone = subprocess.run(["git", "-c", "credential.interactive=never", "clone",
                             "--quiet", "--depth", "1", url, str(dest)],
                            capture_output=True, text=True, timeout=180)
@@ -80,6 +92,8 @@ for key, (_, directory) in repos.items():
                          "missing_or_incompatible": missing, "unparsed": invalid}
 
 free_after = shutil.disk_usage(work).free
+clean_generated_sources()
+free_after_cleanup = shutil.disk_usage(work).free
 devices = []
 for i in range(torch.cuda.device_count()):
     p = torch.cuda.get_device_properties(i)
@@ -88,7 +102,9 @@ for i in range(torch.cuda.device_count()):
 report = {"run_id": run_id, "git_sha": git_sha, "source_repos": results,
           "requirements": requirements, "disk_free_before_bytes": initial_free,
           "disk_free_after_bytes": free_after,
+          "disk_free_after_cleanup_bytes": free_after_cleanup,
           "disk_consumed_bytes": initial_free - free_after,
+          "source_cleanup_completed": True,
           "gpu_devices": devices, "torch_version": torch.__version__,
           "cuda_version": torch.version.cuda,
           "source_only": True, "full_comfyui_installed": False,
@@ -113,6 +129,7 @@ def parse_published_kernel(output, username):
 def validate_report(report, sha, run_id):
     if (report.get("git_sha") != sha or report.get("run_id") != run_id
             or report.get("source_only") is not True
+            or report.get("source_cleanup_completed") is not True
             or report.get("full_comfyui_installed") is not False
             or report.get("comfyui_started") is not False
             or report.get("model_downloaded") is not False

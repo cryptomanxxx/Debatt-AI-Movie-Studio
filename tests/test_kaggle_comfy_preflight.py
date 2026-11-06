@@ -17,12 +17,15 @@ class ComfyPreflightTests(unittest.TestCase):
 
     def test_source_only_no_weights_or_heavy_pip_install(self):
         self.assertIn('"--depth", "1"', KERNEL_SOURCE)
+        self.assertIn("atexit.register(clean_generated_sources)", KERNEL_SOURCE)
+        self.assertIn("clean_generated_sources()\nfree_after_cleanup", KERNEL_SOURCE)
         self.assertNotIn("pip install", KERNEL_SOURCE)
         self.assertNotIn("hf_hub_download", KERNEL_SOURCE)
         self.assertNotIn("snapshot_download", KERNEL_SOURCE)
 
     def test_reject_stale_or_unsafe_report(self):
         good = {"git_sha": "a" * 40, "run_id": "123-1", "source_only": True,
+                "source_cleanup_completed": True,
                 "full_comfyui_installed": False, "comfyui_started": False,
                 "model_downloaded": False, "ltx_loaded": False,
                 "video_generated": False, "gpu_devices": [{"name": "Tesla T4"}],
@@ -30,7 +33,8 @@ class ComfyPreflightTests(unittest.TestCase):
                                  "gguf_plugin": {"cloned": True}}}
         validate_report(good, "a" * 40, "123-1")
         for field, value in [("run_id", "old-1"), ("model_downloaded", True),
-                             ("comfyui_started", True), ("source_only", False)]:
+                             ("comfyui_started", True), ("source_only", False),
+                             ("source_cleanup_completed", False)]:
             with self.assertRaises(ValueError):
                 validate_report({**good, field: value}, "a" * 40, "123-1")
 

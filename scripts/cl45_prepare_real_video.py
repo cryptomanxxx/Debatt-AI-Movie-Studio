@@ -4,6 +4,7 @@ No GPU work, downloads or queue submissions. CL-46 uses the prepared JSON.
 """
 import argparse
 import json
+import re
 from pathlib import Path
 
 from scripts.cl43_video_runtime_preflight import ASSETS, preflight
@@ -25,7 +26,7 @@ def prepare(comfy_root, workflow_path, start_image, end_image, prompt,
         raise ValueError("ComfyUI runtime/assets/ffmpeg/disk preflight is not ready")
     data = json.loads(Path(workflow_path).read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not data or not all(
-        isinstance(k, str) and k.isdecimal() and isinstance(v, dict)
+        isinstance(k, str) and re.fullmatch(r"[0-9]+(?::[0-9]+)*", k) and isinstance(v, dict)
         and isinstance(v.get("class_type"), str) and isinstance(v.get("inputs"), dict)
         for k, v in data.items()
     ):
@@ -61,13 +62,25 @@ def prepare(comfy_root, workflow_path, start_image, end_image, prompt,
     if not node or "text" not in node["inputs"] or not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("Prompt node must expose a text input and prompt must be nonempty")
     node["inputs"]["text"] = prompt
-    if not any("Save" in node["class_type"] or "VideoCombine" in node["class_type"]
-               for node in data.values()):
-        raise ValueError("API graph must contain a save/video output node")
+    video_outputs = []
+    for output in data.values():
+        kind = output["class_type"]
+        settings = output["inputs"]
+        if kind == "SaveVideo" and isinstance(settings.get("filename_prefix"), str) \
+                and settings["filename_prefix"].strip():
+            video_outputs.append(kind)
+        elif kind == "VHS_VideoCombine" and isinstance(settings.get("filename_prefix"), str) \
+                and settings["filename_prefix"].strip() \
+                and isinstance(settings.get("format"), str) \
+                and "mp4" in settings["format"].lower():
+            video_outputs.append(kind)
+    if not video_outputs:
+        raise ValueError("API graph must contain a supported video-saving output node")
 
     return {"graph": data,
             "report": {"source": "official_FLF2V_exported_API_graph",
-                       "nodes": len(data), "vae_override": next(
+                       "nodes": len(data), "video_output_nodes": video_outputs,
+                       "vae_override": next(
                            name for role, _, name in ASSETS if role == "video_vae"),
                        "start_image": start_image, "end_image": end_image,
                        "runtime_preflight_passed": True,

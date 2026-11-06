@@ -28,6 +28,14 @@ audio. We will separately establish if it can be omitted in a video-only
 configuration. Do **not** substitute the existing Q2_K GGUF into an official
 INT8 ConvRot graph without a compatibility test.
 
+**Required workflow edit:** The stock ComfyUI First/Last-Frame template
+selects the BF16 DiffVAE checkpoint (`ltx-2.5-video-vae-bf16.safetensors`).
+After importing the template, open its video VAE loader/subgraph and change
+the `video_vae` model selector to
+`ltx-2.5-video-vae-conv-bf16.safetensors` before running. The preflight
+explicitly records this override; merely finding the four files is not proof
+that an unmodified official template will run.
+
 Authoritative docs:
 - https://docs.ltx.io/open-source-model/integration-tools/comfy-ui/
 - https://docs.ltx.io/open-source-model/reference/workflow-asset-compatibility

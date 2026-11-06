@@ -18,30 +18,38 @@ SUBMISSION = Path("kaggle-cl42-submission")
 _BLOCK8_SCAN = '''            # Names/shapes only: never touch tensor.data or construct a model.
             import re
             pattern = re.compile(r"(?:^|\\.)transformer_blocks\\.(\\d+)\\.")
-            all_block_indices = set()
-            block8 = []
-            for tensor in reader.tensors:
-                name = str(tensor.name)
-                match = pattern.search(name)
-                if match is None:
-                    continue
-                index = int(match.group(1))
-                if index > 1024:
-                    raise ValueError("Implausible video block index")
-                all_block_indices.add(index)
-                if index == 8:
-                    shape = [int(n) for n in tensor.shape]
-                    if not shape or len(shape) > 8 or any(n < 1 for n in shape):
-                        raise ValueError("Invalid block 8 GGUF shape")
-                    logical = math.prod(shape)
-                    if not (1 <= logical <= 1_000_000_000):
-                        raise ValueError("Unbounded block 8 tensor shape")
-                    if len(block8) >= 300:
-                        raise ValueError("Too many block 8 tensors")
-                    block8.append({"name": name[:200], "shape": shape,
-                                   "logical_elements": logical,
-                                   "quantization_type": str(tensor.tensor_type),
-                                   "under_projection_80m_guard": logical <= 80_000_000})
+            # Isolate ReaderTensor references even if scanning throws an error;
+            # otherwise a loop-local mmap view survives the reader cleanup.
+            def scan_tensor_index(reader):
+                all_block_indices = set()
+                block8 = []
+                for tensor in reader.tensors:
+                    name = str(tensor.name)
+                    match = pattern.search(name)
+                    if match is None:
+                        continue
+                    index = int(match.group(1))
+                    if index > 1024:
+                        raise ValueError("Implausible video block index")
+                    all_block_indices.add(index)
+                    if index == 8:
+                        shape = [int(n) for n in tensor.shape]
+                        if not shape or len(shape) > 8 or any(n < 1 for n in shape):
+                            raise ValueError("Invalid block 8 GGUF shape")
+                        logical = math.prod(shape)
+                        if not (1 <= logical <= 1_000_000_000):
+                            raise ValueError("Unbounded block 8 tensor shape")
+                        if len(block8) >= 300:
+                            raise ValueError("Too many block 8 tensors")
+                        qtype = str(tensor.tensor_type)
+                        if not re.fullmatch(r"(?:[0-9]{1,3}|(?:GGMLQuantizationType\\.)?[A-Z][A-Z0-9_]*)", qtype):
+                            raise ValueError("Invalid GGUF quantization metadata")
+                        block8.append({"name": name[:200], "shape": shape,
+                                       "logical_elements": logical,
+                                       "quantization_type": qtype,
+                                       "under_projection_80m_guard": logical <= 80_000_000})
+                return block8, all_block_indices
+            block8, all_block_indices = scan_tensor_index(reader)
             block8.sort(key=lambda item: item["name"])
             first["block8_metadata"] = {
                 "block8_exists_in_gguf_index": bool(block8),
@@ -113,6 +121,8 @@ def validate_report(report, sha, run_id):
                    or not 1 <= len(t["shape"]) <= 8
                    or not all(isinstance(n, int) and n > 0 for n in t["shape"])
                    or t.get("logical_elements") != __import__("math").prod(t["shape"])
+                   or not isinstance(t.get("quantization_type"), str)
+                   or not re.fullmatch(r"(?:[0-9]{1,3}|(?:GGMLQuantizationType\.)?[A-Z][A-Z0-9_]*)", t["quantization_type"])
                    or t.get("under_projection_80m_guard") is not (t["logical_elements"] <= 80_000_000)
                    for t in tensors)
             or metadata.get("all_block8_tensors_under_80m") is not (

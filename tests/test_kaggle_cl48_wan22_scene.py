@@ -60,6 +60,23 @@ class Cl48ProfileTests(unittest.TestCase):
         self.assertIn('if cfg["flow_shift"] is not None:', source)
         self.assertIn('"model_id": "Wan-AI/Wan2.2-TI2V-5B-Diffusers"', source)
 
+    def test_vae_tiling_only_above_proven_480p(self):
+        self.assertFalse(config()["vae_tiling"])
+        self.assertFalse(config(resolution="480x832")["vae_tiling"])
+        self.assertTrue(config(resolution="1280x704")["vae_tiling"])
+        self.assertTrue(config(resolution="704x1280", num_frames=25)["vae_tiling"])
+        cl47_cfg = cl47.build_config(sha=SHA, run_id="1-1", prompt="a scene", seed=1,
+                                     resolution="832x480", num_frames=33, steps=25,
+                                     guidance_scale=5.0, transformer_dtype="float16")
+        self.assertFalse(cl47_cfg["vae_tiling"])
+
+    def test_kernel_reduces_fragmentation_before_torch_import(self):
+        source = cl47.make_kernel(config(resolution="1280x704"))
+        env = source.index('os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")')
+        self.assertLess(env, source.index("import torch"))
+        self.assertIn("pipe.vae.enable_tiling(", source)
+        self.assertIn('progress("vae_decode"', source)
+
 
 if __name__ == "__main__":
     unittest.main()

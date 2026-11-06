@@ -25,8 +25,8 @@ python -m scripts.cl46_real_mp4_attempt \
   --submit --confirm QUEUE_REAL_LTX25_VIDEO
 ```
 
-The script sends the actual graph to the official ComfyUI `/prompt` endpoint, polls `/history/{prompt_id}`, finds an MP4 output, downloads it from `/view`, checks the MP4 container header, and records the prompt ID and output size. If ComfyUI cannot run the model, it reports a real error rather than manufacturing a fake video. A pending prompt may take up to 30 minutes before timing out; a timed-out prompt can still be running in ComfyUI and should be inspected before resubmitting.
+The script sends the actual graph to the official ComfyUI `/prompt` endpoint, polls `/history/{prompt_id}` for an explicit successful completion, finds an MP4 output, downloads it from `/view`, and uses FFprobe to verify a readable video stream with frames before publishing it. If ComfyUI cannot run the model, it preserves the server's HTTP rejection diagnostics and execution-error messages rather than manufacturing a fake video. A pending prompt may take up to 30 minutes before timing out; a timed-out prompt can still be running in ComfyUI and should be inspected before resubmitting. The report is overwritten at the start of each attempt and records the prompt ID as soon as it is queued, so a previous success cannot mask the current failure.
 
-Only localhost ComfyUI is supported, and the script does not upload credentials or model weights. GitHub Actions validates Python code only and **never** runs the real GPU job on a GitHub runner.
+Only localhost ComfyUI is supported; HTTP redirects are rejected, and the script does not upload credentials or model weights. GitHub Actions validates Python code only and **never** runs the real GPU job on a GitHub runner.
 
 Official ComfyUI queue API: https://github.com/Comfy-Org/docs/blob/main/development/comfyui-server/comms_routes.mdx .

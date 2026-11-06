@@ -11,6 +11,7 @@ from scripts.kaggle_gpu_probe import execute, MAX_POLLS, POLL_SECONDS
 import time
 
 SLUG = "debatt-ai-movie-gguf-probe"
+EXPECTED_PUBLISHED_SLUGS = {SLUG, "debatt-ai-movie-gguf-environment-probe"}
 RESULTS = Path("kaggle-gguf-results")
 SUBMISSION = Path("kaggle-gguf-submission")
 
@@ -66,6 +67,18 @@ def validate_report(record, sha, run_id):
         raise ValueError("Invalid or stale GGUF environment probe result")
 
 
+def parse_published_kernel(push_output, username):
+    """Use the canonical Kaggle notebook URL instead of assuming title == ID."""
+    matches = re.findall(r"https://(?:www\.)?kaggle\.com/code/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)",
+                         push_output)
+    if len(matches) != 1:
+        raise ValueError("Kaggle push did not return exactly one notebook URL")
+    owner, slug = matches[0]
+    if owner.lower() != username.lower() or slug not in EXPECTED_PUBLISHED_SLUGS:
+        raise ValueError("Unexpected Kaggle notebook owner or slug")
+    return f"{owner}/{slug}"
+
+
 def retrieve_diagnostics(kernel):
     """Best-effort output collection, including when Kaggle reports failure.
 
@@ -114,6 +127,8 @@ def main():
     if (pushed.returncode or re.search(r"(?im)^\s*(kernel push error|error pushing|failed:|traceback)", pushed.stdout)
             or not re.search(r"kernel version \d+ (successfully )?pushed", pushed.stdout, re.I)):
         raise RuntimeError("Kaggle did not confirm GGUF probe submission")
+    kernel = parse_published_kernel(pushed.stdout, args.username)
+    print(f"Using Kaggle-confirmed notebook ID: {kernel}", flush=True)
     complete = False
     for _ in range(MAX_POLLS):
         state = execute(["kaggle", "kernels", "status", kernel], timeout=60)

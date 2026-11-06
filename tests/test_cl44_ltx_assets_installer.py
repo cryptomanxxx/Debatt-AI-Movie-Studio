@@ -86,6 +86,7 @@ class Cl44Tests(unittest.TestCase):
             info, _ = self._remote(root)
 
             def corrupt(**kwargs):
+                self.assertTrue(kwargs["force_download"])
                 path = root / "models" / kwargs["filename"]
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"z" * 1_000_000)
@@ -95,6 +96,47 @@ class Cl44Tests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "SHA-256/size"):
                     install(root, REVISION, CONFIRM,
                             api=Mock(model_info=Mock(return_value=info)), download=corrupt)
+
+    def test_retry_replaces_invalid_hub_cache_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            info, payload = self._remote(root)
+            manifest = build_manifest(root)
+            for item in manifest:
+                target = Path(item["destination"])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"z" * len(payload))
+
+            def hub_download(**kwargs):
+                # Mimic Hub local-dir cache incorrectly trusting metadata when
+                # force_download is missing, even for a corrupted local file.
+                if kwargs.get("force_download"):
+                    target = root / "models" / kwargs["filename"]
+                    target.write_bytes(payload)
+
+            with patch("scripts.cl44_ltx_assets_installer.shutil.disk_usage",
+                       return_value=SimpleNamespace(free=99_000_000_000)):
+                result = install(root, REVISION, CONFIRM,
+                                 api=Mock(model_info=Mock(return_value=info)),
+                                 download=hub_download)
+            self.assertEqual(len(result["installed_and_sha256_verified_roles"]), 4)
+
+    def test_disk_budget_uses_models_not_comfy_root(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            info, _ = self._remote(root)
+            inspected = []
+
+            def disk_usage(path):
+                inspected.append(Path(path))
+                return SimpleNamespace(free=1)
+
+            with patch("scripts.cl44_ltx_assets_installer.shutil.disk_usage", side_effect=disk_usage):
+                with self.assertRaisesRegex(ValueError, "destination or staging"):
+                    install(root, REVISION, CONFIRM,
+                            api=Mock(model_info=Mock(return_value=info)), download=Mock())
+            self.assertIn(root / "models", inspected)
+            self.assertNotIn(root, inspected)
 
 
 if __name__ == "__main__":

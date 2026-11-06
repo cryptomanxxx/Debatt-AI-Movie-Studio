@@ -11,7 +11,10 @@ class Cl28Tests(unittest.TestCase):
 
     def test_real_rotary_path_is_explicit_and_bounded(self):
         s = cl28.KERNEL_SOURCE
-        self.assertIn("_prepare_positional_embeddings(coords, frame_rate=25", s)
+        self.assertIn("LTXBaseModel._prepare_positional_embeddings(", s)
+        self.assertIn("root, coords, frame_rate=25", s)
+        self.assertNotIn("pe = root._prepare_positional_embeddings(", s)
+        self.assertIn("isinstance(root, LTXBaseModel)", s)
         self.assertIn("v_pe=pe", s)
         self.assertIn('"rotary_positions_applied": True', s)
         self.assertIn('"coordinate_source": "synthetic_grid"', s)

@@ -63,7 +63,8 @@ class Cl47KernelTests(unittest.TestCase):
         source = cl47.KERNEL_SOURCE
         self.assertEqual(source.count('report["video_generated"] = True'), 1)
         self.assertLess(source.index("render(pipe"), source.index('report["video_generated"] = True'))
-        self.assertIn("os.remove(VIDEO)", source)
+        self.assertIn("for path in (VIDEO, UPSCALED):", source)
+        self.assertIn("os.remove(path)", source)
         self.assertIn("raise\n", source)
         self.assertIn("enable_model_cpu_offload()", source)
         self.assertIn('"-c", constraints', source)

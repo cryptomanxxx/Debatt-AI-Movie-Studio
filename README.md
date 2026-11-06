@@ -50,3 +50,7 @@ The manually triggered **Synthetic video artifact demo** workflow produces a two
 ## CL-48: larger model (Wan 2.2 TI2V 5B on Kaggle)
 
 **Actions → Kaggle CL-48 Wan 2.2 TI2V 5B Scene (manual)** renders a 1–5 s clip at 24 fps with the open-weight Wan 2.2 TI2V 5B model, which is about four times larger than CL-47's model. It uses the same verified Kaggle flow, and a token budget guard rejects settings too slow for a T4. See [docs/kaggle-cl48-wan22-scene.md](docs/kaggle-cl48-wan22-scene.md). The first real run (2026-11-06) produced a verified 2-second 832x480 clip in about 13 minutes of Kaggle time (~8.3 s per step, 13.1 GB peak VRAM). Its quality was clearly better than CL-47. A 1280x704 (720p) clip also renders, in about 26 minutes of Kaggle time, using tiled VAE decode.
+
+## CL-49: 1080p upscale and faster 720p decode
+
+The CL-48 workflow can now also output a **1920x1080** copy of each clip (`upscale: 1080p`, the default). It uses Real-ESRGAN x2plus, pinned by SHA-256, followed by an exact fit and crop, and is verified with FFprobe. 720p decode now uses larger VAE tiles (6 per frame instead of 28). See [docs/kaggle-cl49-upscale-and-faster-decode.md](docs/kaggle-cl49-upscale-and-faster-decode.md). Neither change has been measured on Kaggle yet.

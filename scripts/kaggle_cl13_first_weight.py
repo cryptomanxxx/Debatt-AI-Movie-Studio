@@ -15,12 +15,16 @@ _MARKER = '''finally:
 _DOWNLOAD = r'''
     # Only one transformer file. No text encoder, VAE, GPU loading or inference.
     import hashlib
+    import signal
     import urllib.request
     from urllib.error import HTTPError, URLError
 
     repo_id = "unsloth/LTX-2.5-GGUF"
     filename = "ltx-2.5-22b-distilled-Q2_K.gguf"
-    stage = working / "cl13-q2-download.part"
+    # Kaggle publishes /kaggle/working as outputs. Keep any partial model OUTSIDE it.
+    temporary = Path("/kaggle/temp")
+    temporary.mkdir(parents=True, exist_ok=True)
+    stage = temporary / "cl13-q2-download.part"
     first = {"attempted": False, "download_complete": False,
              "sha256_verified": False, "stage_removed": False,
              "target_repository": repo_id, "target_filename": filename}
@@ -47,31 +51,36 @@ _DOWNLOAD = r'''
             raise ValueError("No verifiable LFS SHA-256: refuse large download")
         first["expected_sha256"] = checksum
         # Leave 3 GB disk reserve and an extra 1 GB cushion for staging/runtime.
-        if shutil.disk_usage(working).free - entry.size < 4_000_000_000:
+        if shutil.disk_usage(temporary).free - entry.size < 4_000_000_000:
             raise ValueError("Insufficient disk space for file plus 4 GB reserve")
         if entry.size > 13_000_000_000:
             raise ValueError("Single-file download cap 13 GB exceeded")
         first["attempted"] = True
         url = hf_hub_url(repo_id, entry.path, revision=info.sha)
-        started = time.monotonic()
         downloaded = 0
-        with urllib.request.urlopen(url, timeout=30) as response, stage.open("xb") as out:
-            if response.status != 200:
-                raise ValueError("Unexpected download HTTP status")
-            length = response.headers.get("Content-Length")
-            if length is not None and int(length) != entry.size:
-                raise ValueError("Content-Length mismatch; download aborted")
-            while True:
-                if time.monotonic() - started > 720:
-                    raise TimeoutError("12-minute weight download deadline")
-                chunk = response.read(4 * 1024 * 1024)
-                if not chunk:
-                    break
-                downloaded += len(chunk)
-                if downloaded > entry.size or shutil.disk_usage(working).free < 4_000_000_000:
-                    raise ValueError("Download size or disk-reserve limit exceeded")
-                out.write(chunk)
-                digest.update(chunk)
+        def deadline_exceeded(signum, frame):
+            raise TimeoutError("12-minute weight download deadline")
+        previous_handler = signal.signal(signal.SIGALRM, deadline_exceeded)
+        signal.setitimer(signal.ITIMER_REAL, 720)
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response, stage.open("xb") as out:
+                if response.status != 200:
+                    raise ValueError("Unexpected download HTTP status")
+                length = response.headers.get("Content-Length")
+                if length is not None and int(length) != entry.size:
+                    raise ValueError("Content-Length mismatch; download aborted")
+                while True:
+                    chunk = response.read(4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    downloaded += len(chunk)
+                    if downloaded > entry.size or shutil.disk_usage(temporary).free < 4_000_000_000:
+                        raise ValueError("Download size or disk-reserve limit exceeded")
+                    out.write(chunk)
+                    digest.update(chunk)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
         first["downloaded_bytes"] = downloaded
         first["sha256_verified"] = downloaded == entry.size and digest.hexdigest() == checksum
         first["download_complete"] = first["sha256_verified"]
@@ -84,7 +93,7 @@ _DOWNLOAD = r'''
         if stage.is_file():
             stage.unlink()
         first["stage_removed"] = not stage.exists()
-        first["disk_free_after_cleanup_bytes"] = shutil.disk_usage(working).free
+        first["disk_free_after_cleanup_bytes"] = shutil.disk_usage(temporary).free
 '''
 
 

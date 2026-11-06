@@ -4,7 +4,7 @@ from pathlib import Path
 from scripts import kaggle_cl7_import_probe as cl7
 from scripts.kaggle_cl19_loader_mmap import KERNEL_SOURCE as CL19_SOURCE, _CHILD_CODE as CL19_CHILD
 
-SLUG = "debatt-ai-movie-cl20-cpu-model-construct"
+SLUG = "debatt-ai-movie-cl20-cpu-model-construction"
 TITLE = "Debatt AI Movie CL20 CPU Model Construction"
 REPORT_NAME = "cl20-cpu-model.json"
 RESULTS = Path("kaggle-cl20-results")

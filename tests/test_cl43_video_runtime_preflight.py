@@ -2,6 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts.cl43_video_runtime_preflight import ASSETS, WORKFLOW, preflight
@@ -34,11 +35,12 @@ class Cl43Tests(unittest.TestCase):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.touch()
             with patch("scripts.cl43_video_runtime_preflight.shutil.which", return_value="/usr/bin/ffmpeg"), \
-                 patch("scripts.cl43_video_runtime_preflight.shutil.disk_usage", return_value=(50_000_000_000, 0, 50_000_000_000)):
+                 patch("scripts.cl43_video_runtime_preflight.shutil.disk_usage", return_value=SimpleNamespace(free=50_000_000_000)):
                 result = preflight(root)
             self.assertTrue(result["ready_for_manual_workflow_import"])
             self.assertFalse(result["gpu_memory_fit_verified"])
             self.assertFalse(result["model_hashes_verified"])
+            self.assertEqual(result["video_vae_template_override"], "ltx-2.5-video-vae-conv-bf16.safetensors")
 
 
 if __name__ == "__main__":

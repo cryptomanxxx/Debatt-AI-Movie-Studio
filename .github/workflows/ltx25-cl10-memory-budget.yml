@@ -1,0 +1,31 @@
+name: LTX 2.5 CL-10 GGUF Memory Budget (metadata only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test offline memory arithmetic
+        run: python -m unittest discover -s tests -p 'test_ltx25_cl10_memory_budget.py' -v
+      - name: Install metadata client only
+        run: python -m pip install 'huggingface_hub>=0.35,<2'
+      - name: Recheck model metadata and calculate non-execution budgets
+        run: python -m scripts.ltx25_cl10_memory_budget --output cl10-results/gguf-memory-budget.json
+      - name: Upload diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: movie-studio-cl10-memory-${{ github.run_id }}
+          path: cl10-results/gguf-memory-budget.json
+          retention-days: 7
+          if-no-files-found: warn

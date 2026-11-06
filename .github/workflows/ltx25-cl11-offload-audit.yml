@@ -1,0 +1,33 @@
+name: LTX 2.5 CL-11 Offload Source Audit (CPU only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Unit tests
+        run: python -m unittest discover -s tests -p 'test_cl11_offload_source_audit.py' -v
+      - name: Inspect pinned upstream source trees without weights
+        run: python -m scripts.cl11_offload_source_audit --source-root cl11-source --output cl11-results/offload-source-audit.json
+      - name: Clean generated source trees before artifact upload
+        if: always()
+        run: |
+          python -c 'import shutil; shutil.rmtree("cl11-source", ignore_errors=True)'
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: movie-studio-cl11-offload-${{ github.run_id }}
+          path: cl11-results/offload-source-audit.json
+          retention-days: 7
+          if-no-files-found: warn

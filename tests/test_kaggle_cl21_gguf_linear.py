@@ -13,6 +13,8 @@ class Cl21Tests(unittest.TestCase):
         s = cl21.KERNEL_SOURCE
         self.assertIn('root = model.model.diffusion_model', s)
         self.assertIn('isinstance(layer, GGMLOps.Linear)', s)
+        self.assertIn('shape[0] * shape[1] <= 8_000_000', s)
+        self.assertNotIn('weight.numel() <= 8_000_000', s)
         self.assertIn('y = layer(x)', s)
         self.assertIn('torch.isfinite(y).all()', s)
         self.assertIn('"real_gguf_layer": True', s)

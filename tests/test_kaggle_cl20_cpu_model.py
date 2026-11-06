@@ -1,10 +1,15 @@
 """CL-20 static safety and report validation checks."""
 import unittest
+import re
 
 from scripts import kaggle_cl20_cpu_model as cl20
 
 
 class Cl20Tests(unittest.TestCase):
+    def test_title_matches_expected_canonical_kaggle_slug(self):
+        self.assertEqual(re.sub(r"[^a-z0-9]+", "-", cl20.TITLE.lower()).strip("-"),
+                         cl20.SLUG)
+
     def test_cpu_only_construction_is_guarded(self):
         s = cl20.KERNEL_SOURCE
         self.assertIn('comfy.sd.load_diffusion_model_state_dict(', s)

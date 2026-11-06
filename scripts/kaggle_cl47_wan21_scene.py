@@ -31,6 +31,18 @@ PACKAGES = (
     "imageio-ffmpeg==0.6.0",
 )
 VAE_TILING_ABOVE_PIXELS = 832 * 480
+# CL-48b used diffusers' default 256 px tiles (stride 192): 28 tiles per 720p frame and a
+# 9.2 min decode. 512 px tiles with the same 64 px overlap need 6 tiles per frame.
+VAE_TILE_KWARGS = {"tile_sample_min_height": 512, "tile_sample_min_width": 512,
+                   "tile_sample_stride_height": 448, "tile_sample_stride_width": 448}
+# CL-49: Real-ESRGAN x2plus, pinned by SHA-256, loaded with spandrel's restricted unpickler.
+UPSCALER = {
+    "name": "RealESRGAN_x2plus",
+    "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
+    "sha256": "49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb",
+    "package": "spandrel==0.4.2",
+}
+UPSCALE_TARGETS = {"1080p": (1920, 1080)}
 DEFAULT_NEGATIVE = (
     "blurry, low quality, distorted, deformed, jpeg artifacts, watermark, text, "
     "subtitles, static image, worst quality"
@@ -99,6 +111,7 @@ CONFIG = json.loads(__CONFIG_JSON__)
 WORK = "/kaggle/working"
 REPORT = os.path.join(WORK, CONFIG["report_name"])
 VIDEO = os.path.join(WORK, CONFIG["video_name"])
+UPSCALED = os.path.join(WORK, CONFIG["upscale"]["video_name"]) if CONFIG.get("upscale") else None
 CACHE = "/tmp/wan21-model"
 MIN_FREE_DISK = 30_000_000_000
 
@@ -148,17 +161,48 @@ def frame_stats(frames, np):
     return stats
 
 
+def encode_prompts(local, cfg, torch, device):
+    """Encode prompt and negative prompt, then free the ~11 GB UMT5 encoder.
+
+    CL-49 verification run 42259470579 was killed by the Linux OOM killer
+    (system RAM) at the end of the 720p VAE decode, while the idle text
+    encoder still sat in CPU RAM next to the transformer. Encoding first and
+    dropping the encoder removes it for the whole denoise/decode phase.
+    Uses diffusers' own WanPipeline.encode_prompt, so the embeddings match
+    what the pipeline would compute from the prompt strings.
+    """
+    from diffusers import UniPCMultistepScheduler, WanPipeline
+    from transformers import AutoTokenizer, UMT5EncoderModel
+    tokenizer = AutoTokenizer.from_pretrained(local, subfolder="tokenizer")
+    # T4 has no fast bf16, but UMT5 overflows in fp16; it runs once, so bf16 is fine.
+    text_encoder = UMT5EncoderModel.from_pretrained(
+        local, subfolder="text_encoder", dtype=torch.bfloat16).to(device)
+    scheduler = UniPCMultistepScheduler.from_pretrained(local, subfolder="scheduler")
+    encoder = WanPipeline(tokenizer=tokenizer, text_encoder=text_encoder, vae=None,
+                          transformer=None, scheduler=scheduler)
+    with torch.inference_mode():
+        prompt_embeds, negative_embeds = encoder.encode_prompt(
+            prompt=cfg["prompt"], negative_prompt=cfg["negative_prompt"],
+            do_classifier_free_guidance=cfg["guidance_scale"] > 1.0,
+            max_sequence_length=512, device=device)  # WanPipeline.__call__ default
+    del encoder, text_encoder
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return prompt_embeds, negative_embeds
+
+
 def load_pipeline(local, cfg, torch, offload=True):
     """Load a Wan model from a local snapshot. Shared with offline tests."""
     from diffusers import AutoencoderKLWan, UniPCMultistepScheduler, WanPipeline
-    from transformers import UMT5EncoderModel
-    # T4 has no fast bf16, but UMT5 overflows in fp16; it runs once, so bf16 is fine.
-    text_encoder = UMT5EncoderModel.from_pretrained(
-        local, subfolder="text_encoder", dtype=torch.bfloat16)
+    device = torch.device("cuda" if offload else "cpu")
+    progress("encode_prompt")
+    embeds = encode_prompts(local, cfg, torch, device)
     vae = AutoencoderKLWan.from_pretrained(local, subfolder="vae", dtype=torch.float32)
     pipe = WanPipeline.from_pretrained(
-        local, text_encoder=text_encoder, vae=vae,
+        local, text_encoder=None, tokenizer=None, vae=vae,
         dtype=getattr(torch, cfg["transformer_dtype"]))
+    pipe.cl_prompt_embeds = embeds
     if cfg["flow_shift"] is not None:
         pipe.scheduler = UniPCMultistepScheduler.from_config(
             pipe.scheduler.config, flow_shift=cfg["flow_shift"])
@@ -170,21 +214,30 @@ def load_pipeline(local, cfg, torch, offload=True):
     return pipe
 
 
-def render(pipe, cfg, torch, np, export_to_video, video_path):
-    """Run the pipeline and write the MP4. Shared with offline tests."""
+def render(pipe, cfg, torch, np, export_to_video, video_path, keep=None):
+    """Run the pipeline and write the MP4. Shared with offline tests.
+
+    If ``keep`` is a list, the float frames are appended to it for upscaling.
+    """
     total = cfg["steps"]
+    marks = {}
 
     def on_step(_pipe, step, _timestep, callback_kwargs):
         progress("denoise", step=step + 1, total=total)
         if step + 1 == total:
+            marks["decode_start"] = time.time()
             progress("vae_decode", tiling=bool(cfg.get("vae_tiling")))
         return callback_kwargs
 
     generator = torch.Generator(device="cpu").manual_seed(cfg["seed"])
     started = time.time()
+    embeds = getattr(pipe, "cl_prompt_embeds", None)
+    if embeds is not None:
+        text = {"prompt_embeds": embeds[0], "negative_prompt_embeds": embeds[1]}
+    else:
+        text = {"prompt": cfg["prompt"], "negative_prompt": cfg["negative_prompt"]}
     output = pipe(
-        prompt=cfg["prompt"],
-        negative_prompt=cfg["negative_prompt"],
+        **text,
         height=cfg["height"],
         width=cfg["width"],
         num_frames=cfg["num_frames"],
@@ -195,7 +248,8 @@ def render(pipe, cfg, torch, np, export_to_video, video_path):
         callback_on_step_end=on_step,
     )
     frames = output.frames[0]
-    generation_seconds = time.time() - started
+    finished = time.time()
+    generation_seconds = finished - started
     stats = frame_stats(frames, np)
     if stats["shape"][0] != cfg["num_frames"]:
         raise RuntimeError("Expected " + str(cfg["num_frames"]) + " frames, got "
@@ -203,8 +257,73 @@ def render(pipe, cfg, torch, np, export_to_video, video_path):
     export_to_video(list(frames), video_path, fps=cfg["fps"])
     if not os.path.isfile(video_path) or os.path.getsize(video_path) < 1000:
         raise RuntimeError("MP4 export produced no usable file")
-    return {"generation_seconds": round(generation_seconds, 1), "frames": stats,
-            "video_bytes": os.path.getsize(video_path)}
+    if keep is not None:
+        keep.append(frames)
+    result = {"generation_seconds": round(generation_seconds, 1), "frames": stats,
+              "video_bytes": os.path.getsize(video_path)}
+    if "decode_start" in marks:
+        result["denoise_seconds"] = round(marks["decode_start"] - started, 1)
+        result["vae_decode_seconds"] = round(finished - marks["decode_start"], 1)
+    return result
+
+
+def fit_and_crop(image, target_w, target_h, torch):
+    """Scale a (1, 3, H, W) tensor to cover target_w x target_h, then centre-crop."""
+    _, _, h, w = image.shape
+    scale = max(target_w / w, target_h / h)
+    new_w, new_h = max(target_w, round(w * scale)), max(target_h, round(h * scale))
+    resized = torch.nn.functional.interpolate(
+        image, size=(new_h, new_w), mode="bicubic", align_corners=False, antialias=True)
+    top, left = (new_h - target_h) // 2, (new_w - target_w) // 2
+    return resized[:, :, top:top + target_h, left:left + target_w].clamp(0, 1)
+
+
+def upscale_frames(frames, cfg, torch, np, model, device, dtype):
+    """Real-ESRGAN each frame, then fit to the target size. Shared with offline tests."""
+    up = cfg["upscale"]
+    out = []
+    with torch.inference_mode():
+        for index, frame in enumerate(frames):
+            tensor = torch.from_numpy(np.ascontiguousarray(frame)).permute(2, 0, 1)[None]
+            tensor = tensor.to(device=device, dtype=dtype)
+            sr = model(tensor).float().clamp(0, 1)
+            fitted = fit_and_crop(sr, up["width"], up["height"], torch)
+            out.append(fitted[0].permute(1, 2, 0).cpu().numpy())
+            if index % 8 == 0:
+                progress("upscale", frame=index + 1, total=len(frames))
+    return out
+
+
+def export_exact(frames, video_path, fps, export_to_video):
+    """Export without imageio's default macro_block_size=16, which pads 1080 to 1088."""
+    export_to_video(frames, video_path, fps=fps, macro_block_size=1)
+
+
+def run_upscale(frames, cfg, torch, np, export_to_video, video_path):
+    import hashlib
+    import urllib.request
+    up = cfg["upscale"]
+    install([up["package"]])
+    from spandrel import ModelLoader
+    weights = "/tmp/" + up["model"] + ".pth"
+    started = time.time()
+    urllib.request.urlretrieve(up["url"], weights)
+    digest = hashlib.sha256(open(weights, "rb").read()).hexdigest()
+    if digest != up["sha256"]:
+        raise RuntimeError("Upscaler weights SHA-256 mismatch: " + digest)
+    model = ModelLoader().load_from_file(weights).model.eval()
+    device = torch.device("cuda")
+    model = model.to(device=device, dtype=torch.float16)
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    upscaled = upscale_frames(frames, cfg, torch, np, model, device, torch.float16)
+    stats = frame_stats(upscaled, np)
+    export_exact(upscaled, video_path, cfg["fps"], export_to_video)
+    if not os.path.isfile(video_path) or os.path.getsize(video_path) < 1000:
+        raise RuntimeError("Upscaled MP4 export produced no usable file")
+    return {"model": up["model"], "seconds": round(time.time() - started, 1),
+            "peak_vram_bytes": int(torch.cuda.max_memory_allocated()),
+            "frames": stats, "video_bytes": os.path.getsize(video_path)}
 
 
 def main():
@@ -214,7 +333,8 @@ def main():
         "model_id": CONFIG["model_id"], "requested_revision": CONFIG["revision"],
         "settings": {key: CONFIG[key] for key in (
             "prompt", "negative_prompt", "seed", "height", "width", "num_frames",
-            "fps", "steps", "guidance_scale", "transformer_dtype", "vae_tiling")},
+            "fps", "steps", "guidance_scale", "transformer_dtype", "vae_tiling",
+            "upscale")},
         "packages": CONFIG["packages"], "video_generated": False, "error": None,
     }
     try:
@@ -258,15 +378,26 @@ def main():
         torch.cuda.reset_peak_memory_stats()
 
         progress("generate")
-        report.update(render(pipe, CONFIG, torch, np, export_to_video, VIDEO))
+        kept = []
+        report.update(render(pipe, CONFIG, torch, np, export_to_video, VIDEO, keep=kept))
         report["peak_vram_bytes"] = int(torch.cuda.max_memory_allocated())
         report["video_generated"] = True
+        if UPSCALED:
+            # Free the video pipeline before loading the upscaler.
+            pipe.maybe_free_model_hooks()
+            del pipe
+            gc.collect()
+            torch.cuda.empty_cache()
+            progress("upscale", target=CONFIG["upscale"]["label"])
+            report["upscale_result"] = run_upscale(
+                kept[0], CONFIG, torch, np, export_to_video, UPSCALED)
         progress("done", video_bytes=report["video_bytes"])
     except BaseException as exc:
         report["error"] = type(exc).__name__ + ": " + str(exc)[:4000]
         report["traceback"] = traceback.format_exc()[-8000:]
-        if os.path.exists(VIDEO):
-            os.remove(VIDEO)
+        for path in (VIDEO, UPSCALED):
+            if path and os.path.exists(path):
+                os.remove(path)
         raise
     finally:
         report["total_seconds"] = round(time.time() - started, 1)
@@ -287,9 +418,22 @@ def latent_tokens(profile, height, width, num_frames):
     return ((num_frames - 1) // 4 + 1) * (height // spatial // 2) * (width // spatial // 2)
 
 
+def upscale_config(upscale, height, width, profile):
+    if upscale in (None, "none"):
+        return None
+    if upscale not in UPSCALE_TARGETS:
+        raise ValueError("upscale must be 'none' or one of " + ", ".join(UPSCALE_TARGETS))
+    long_side, short_side = UPSCALE_TARGETS[upscale]
+    target_w, target_h = (long_side, short_side) if width >= height else (short_side, long_side)
+    return {"label": upscale, "width": target_w, "height": target_h,
+            "model": UPSCALER["name"], "url": UPSCALER["url"], "sha256": UPSCALER["sha256"],
+            "package": UPSCALER["package"],
+            "video_name": profile.stem + "-" + upscale + ".mp4"}
+
+
 def build_config(*, sha, run_id, prompt, seed, resolution, num_frames, steps,
                  guidance_scale, transformer_dtype, revision="main",
-                 negative_prompt=DEFAULT_NEGATIVE, profile=WAN21_1_3B):
+                 negative_prompt=DEFAULT_NEGATIVE, profile=WAN21_1_3B, upscale="none"):
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("Full Git commit SHA required")
     if not re.fullmatch(r"[0-9]+-[0-9]+", run_id):
@@ -326,6 +470,8 @@ def build_config(*, sha, run_id, prompt, seed, resolution, num_frames, steps,
         "flow_shift": profile.flow_shift,
         # Full-frame decode is proven up to 832x480 (CL-47, CL-48); tile anything larger.
         "vae_tiling": height * width > VAE_TILING_ABOVE_PIXELS,
+        "vae_tile_kwargs": dict(VAE_TILE_KWARGS),
+        "upscale": upscale_config(upscale, height, width, profile),
         "packages": list(PACKAGES), "report_name": profile.report_name,
         "video_name": profile.video_name,
     }
@@ -406,6 +552,7 @@ def main(argv=None, profile=WAN21_1_3B, defaults=None):
     p.add_argument("--guidance-scale", type=float, default=5.0)
     p.add_argument("--transformer-dtype", default="float16")
     p.add_argument("--revision", default="main")
+    p.add_argument("--upscale", default="none", help="none or 1080p (Real-ESRGAN x2 + fit)")
     args = p.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9_-]+", args.username):
         p.error("Invalid Kaggle username")
@@ -414,7 +561,7 @@ def main(argv=None, profile=WAN21_1_3B, defaults=None):
             sha=args.sha, run_id=args.run_id, prompt=args.prompt, seed=args.seed,
             resolution=args.resolution, num_frames=args.num_frames, steps=args.steps,
             guidance_scale=args.guidance_scale, transformer_dtype=args.transformer_dtype,
-            revision=args.revision, profile=profile)
+            revision=args.revision, profile=profile, upscale=args.upscale)
     except ValueError as exc:
         p.error(str(exc))
 
@@ -473,6 +620,12 @@ def main(argv=None, profile=WAN21_1_3B, defaults=None):
     validate_report(report, config)
     video = probe_video(results / profile.video_name, config)
     report["verified_mp4"] = video
+    if config["upscale"]:
+        up = config["upscale"]
+        upscaled = probe_video(results / up["video_name"],
+                               {**config, "width": up["width"], "height": up["height"]})
+        report["verified_upscaled_mp4"] = upscaled
+        print(f"Verified {up['label']} upscale:", json.dumps(upscaled), flush=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"Verified {profile.name} scene:", json.dumps(video), flush=True)
     return 0

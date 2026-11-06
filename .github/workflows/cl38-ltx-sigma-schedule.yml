@@ -1,0 +1,27 @@
+name: CL-38 LTX Sigma Schedule (manual CPU)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  schedule-formula:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run CPU-only unit tests
+        run: python -m unittest discover -s tests -q
+      - name: Reproduce bounded sigma schedule
+        run: python -m scripts.cl38_ltx_sigma_schedule --output cl38-sigma-results/report.json
+      - name: Upload mathematical reference report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cl38-sigma-reference
+          path: cl38-sigma-results/report.json
+          retention-days: 7

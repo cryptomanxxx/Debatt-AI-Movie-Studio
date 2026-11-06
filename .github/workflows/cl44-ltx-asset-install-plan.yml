@@ -1,0 +1,27 @@
+name: CL-44 LTX-2.5 Asset Install Plan (CPU only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test installer without weights or network downloads
+        run: python -m unittest discover -s tests -q
+      - name: Create dry-run asset plan only
+        run: python -m scripts.cl44_ltx_assets_installer --comfy-root ./ComfyUI --output cl44-results/report.json
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: cl44-ltx-asset-install-plan
+          path: cl44-results/report.json
+          retention-days: 7

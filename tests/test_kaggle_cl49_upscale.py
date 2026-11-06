@@ -107,6 +107,15 @@ class Cl49KernelTests(unittest.TestCase):
             stream = json.loads(out)["streams"][0]
             self.assertEqual((stream["width"], stream["height"]), (1920, 1080))
 
+    def test_text_encoder_is_freed_before_video_pipeline_loads(self):
+        source = cl47.make_kernel(config())
+        encode = source.index("embeds = encode_prompts(local, cfg, torch, device)")
+        self.assertLess(encode, source.index("pipe = WanPipeline.from_pretrained("))
+        self.assertIn("local, text_encoder=None, tokenizer=None, vae=vae,", source)
+        self.assertIn("del encoder, text_encoder", source)
+        self.assertIn("max_sequence_length=512", source)  # WanPipeline.__call__ default
+        self.assertIn('"prompt_embeds": embeds[0], "negative_prompt_embeds": embeds[1]', source)
+
 
 class Cl49VerificationTests(unittest.TestCase):
     def test_upscaled_video_probed_at_target_size(self):

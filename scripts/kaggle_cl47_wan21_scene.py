@@ -161,17 +161,48 @@ def frame_stats(frames, np):
     return stats
 
 
+def encode_prompts(local, cfg, torch, device):
+    """Encode prompt and negative prompt, then free the ~11 GB UMT5 encoder.
+
+    CL-49 verification run 42259470579 was killed by the Linux OOM killer
+    (system RAM) at the end of the 720p VAE decode, while the idle text
+    encoder still sat in CPU RAM next to the transformer. Encoding first and
+    dropping the encoder removes it for the whole denoise/decode phase.
+    Uses diffusers' own WanPipeline.encode_prompt, so the embeddings match
+    what the pipeline would compute from the prompt strings.
+    """
+    from diffusers import UniPCMultistepScheduler, WanPipeline
+    from transformers import AutoTokenizer, UMT5EncoderModel
+    tokenizer = AutoTokenizer.from_pretrained(local, subfolder="tokenizer")
+    # T4 has no fast bf16, but UMT5 overflows in fp16; it runs once, so bf16 is fine.
+    text_encoder = UMT5EncoderModel.from_pretrained(
+        local, subfolder="text_encoder", dtype=torch.bfloat16).to(device)
+    scheduler = UniPCMultistepScheduler.from_pretrained(local, subfolder="scheduler")
+    encoder = WanPipeline(tokenizer=tokenizer, text_encoder=text_encoder, vae=None,
+                          transformer=None, scheduler=scheduler)
+    with torch.inference_mode():
+        prompt_embeds, negative_embeds = encoder.encode_prompt(
+            prompt=cfg["prompt"], negative_prompt=cfg["negative_prompt"],
+            do_classifier_free_guidance=cfg["guidance_scale"] > 1.0,
+            max_sequence_length=512, device=device)  # WanPipeline.__call__ default
+    del encoder, text_encoder
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return prompt_embeds, negative_embeds
+
+
 def load_pipeline(local, cfg, torch, offload=True):
     """Load a Wan model from a local snapshot. Shared with offline tests."""
     from diffusers import AutoencoderKLWan, UniPCMultistepScheduler, WanPipeline
-    from transformers import UMT5EncoderModel
-    # T4 has no fast bf16, but UMT5 overflows in fp16; it runs once, so bf16 is fine.
-    text_encoder = UMT5EncoderModel.from_pretrained(
-        local, subfolder="text_encoder", dtype=torch.bfloat16)
+    device = torch.device("cuda" if offload else "cpu")
+    progress("encode_prompt")
+    embeds = encode_prompts(local, cfg, torch, device)
     vae = AutoencoderKLWan.from_pretrained(local, subfolder="vae", dtype=torch.float32)
     pipe = WanPipeline.from_pretrained(
-        local, text_encoder=text_encoder, vae=vae,
+        local, text_encoder=None, tokenizer=None, vae=vae,
         dtype=getattr(torch, cfg["transformer_dtype"]))
+    pipe.cl_prompt_embeds = embeds
     if cfg["flow_shift"] is not None:
         pipe.scheduler = UniPCMultistepScheduler.from_config(
             pipe.scheduler.config, flow_shift=cfg["flow_shift"])
@@ -200,9 +231,13 @@ def render(pipe, cfg, torch, np, export_to_video, video_path, keep=None):
 
     generator = torch.Generator(device="cpu").manual_seed(cfg["seed"])
     started = time.time()
+    embeds = getattr(pipe, "cl_prompt_embeds", None)
+    if embeds is not None:
+        text = {"prompt_embeds": embeds[0], "negative_prompt_embeds": embeds[1]}
+    else:
+        text = {"prompt": cfg["prompt"], "negative_prompt": cfg["negative_prompt"]}
     output = pipe(
-        prompt=cfg["prompt"],
-        negative_prompt=cfg["negative_prompt"],
+        **text,
         height=cfg["height"],
         width=cfg["width"],
         num_frames=cfg["num_frames"],

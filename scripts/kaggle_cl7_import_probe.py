@@ -30,36 +30,73 @@ def checked_command(command, timeout=90, cwd=None):
         return {"ok": result.returncode == 0,
                 "exit_code": result.returncode,
                 "output_tail": (result.stdout + "\n" + result.stderr)[-2000:]}
+    except subprocess.TimeoutExpired as exc:
+        def decode_output(value):
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return value or ""
+        return {"ok": False, "error": f"timeout {timeout}s",
+                "output_tail": (decode_output(exc.stdout) + "\n" +
+                                decode_output(exc.stderr))[-2000:]}
+
+def source_size(root):
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+
+def bounded_clone(url, target):
+    # Reserve enough space for an entire 150 MB checkout before starting.
+    if shutil.disk_usage(sources).free < MIN_FREE_DISK_BYTES + 150_000_000:
+        return {"ok": False, "error": "insufficient free headroom before clone"}
+    command = ["git", "clone", "--quiet", "--depth", "1", "--single-branch",
+               "--filter=blob:none", url, str(target)]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    start = time.monotonic()
+    violation = None
+    while process.poll() is None:
+        if time.monotonic() - start >= 90:
+            violation = "clone timeout 90s"
+        elif source_size(target) > 150_000_000:
+            violation = "source exceeded 150MB ceiling during clone"
+        elif shutil.disk_usage(sources).free < MIN_FREE_DISK_BYTES:
+            violation = "disk safety threshold during clone"
+        if violation:
+            process.kill()
+            break
+        time.sleep(0.2)
+    try:
+        stdout, stderr = process.communicate(timeout=5)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"timeout {timeout}s"}
+        process.kill()
+        stdout, stderr = process.communicate()
+        violation = violation or "clone failed to stop"
+    result = {"ok": process.returncode == 0 and not violation,
+              "output_tail": (stdout + b"\n" + stderr).decode("utf-8", "replace")[-2000:]}
+    if violation:
+        result["error"] = violation
+    if not result["ok"]:
+        shutil.rmtree(target, ignore_errors=True)
+    else:
+        result["source_bytes"] = source_size(target)
+    return result
 
 checks = {"pip_check": checked_command([sys.executable, "-m", "pip", "check"], 40)}
 repositories = {
     "ComfyUI": "https://github.com/comfyanonymous/ComfyUI.git",
     "ComfyUI-GGUF": "https://github.com/city96/ComfyUI-GGUF.git",
 }
-for name, url in repositories.items():
-    target = sources / name
-    if shutil.disk_usage(sources).free < MIN_FREE_DISK_BYTES:
-        checks[name] = {"ok": False, "error": "disk safety threshold"}
-        continue
-    checks[name] = checked_command(["git", "clone", "--depth", "1", "--single-branch",
-                                     "--filter=blob:none", url, str(target)], 90)
-    if target.exists():
-        checks[name]["source_bytes"] = sum(p.stat().st_size for p in target.rglob("*")
-                                             if p.is_file())
-        if checks[name]["source_bytes"] > 150_000_000:
-            checks[name] = {"ok": False, "error": "source exceeded 150MB ceiling"}
-            shutil.rmtree(target)
-
-comfy = sources / "ComfyUI"
-if (comfy / "nodes.py").is_file():
-    # Import smoke test in a child process, never launch the ComfyUI server.
-    checks["comfy_nodes_import"] = checked_command(
-        [sys.executable, "-c", "import nodes; print('ComfyUI nodes import OK')"],
-        45, comfy)
-else:
-    checks["comfy_nodes_import"] = {"ok": False, "error": "ComfyUI source absent"}
+try:
+    for name, url in repositories.items():
+        checks[name] = bounded_clone(url, sources / name)
+    comfy = sources / "ComfyUI"
+    if (comfy / "nodes.py").is_file():
+        # Import smoke test in a child process, never launch the ComfyUI server.
+        checks["comfy_nodes_import"] = checked_command(
+            [sys.executable, "-c", "import nodes; print('ComfyUI nodes import OK')"],
+            45, comfy)
+    else:
+        checks["comfy_nodes_import"] = {"ok": False, "error": "ComfyUI source absent"}
+finally:
+    # Kaggle output downloads must contain only diagnostics, never cloned repositories.
+    shutil.rmtree(sources, ignore_errors=True)
 
 report["cl7_checks"] = checks
 report["cl7_disk_free_after_bytes"] = shutil.disk_usage(working).free

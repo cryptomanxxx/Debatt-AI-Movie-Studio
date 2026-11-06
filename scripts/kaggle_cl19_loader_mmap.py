@@ -18,93 +18,100 @@ _MARKER = '''    except Exception as exc:
 _PROBE = '''        # Invoke the *actual* ComfyUI-GGUF GGUF-to-state-dict loader. Never
         # invoke comfy.sd.load_diffusion_model_state_dict or ModelPatcher:
         # those may materialize the full 22B model and exceed the T4 memory.
-        import importlib
+        import subprocess
         import sys
-        import types
         import time
         import psutil
-        import torch
-        pkg_name = "cl19_gguf_package"
-        package = types.ModuleType(pkg_name)
-        package.__path__ = [str(sources / "ComfyUI-GGUF")]
-        sys.modules[pkg_name] = package
-        sys.path.insert(0, str(sources / "ComfyUI"))
-        state_dict = None
-        extra = None
+        # A parent watchdog can terminate a child even if the loader is stuck.
+        # The child reports PyTorch peak allocated bytes, not just its final
+        # allocation. The parent's RSS measurements include transient peaks.
+        child_code = __CL19_CHILD_CODE__
+        child = subprocess.Popen(
+            [sys.executable, "-c", child_code, str(sources), str(stage)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        process = psutil.Process(child.pid)
+        peak_rss = 0
+        started = time.monotonic()
         try:
-            module = importlib.import_module(pkg_name + ".loader")
-            process = psutil.Process()
-            rss_before = process.memory_info().rss
-            gpu_before = [torch.cuda.memory_allocated(i) for i in range(2)]
-            started = time.monotonic()
-            def loader_deadline(signum, frame):
-                raise TimeoutError("ComfyUI-GGUF state-dict reader exceeded 120 seconds")
-            saved_handler = signal.signal(signal.SIGALRM, loader_deadline)
-            signal.setitimer(signal.ITIMER_REAL, 120)
-            try:
-                state_dict, extra = module.gguf_sd_loader(str(stage))
-            finally:
-                signal.setitimer(signal.ITIMER_REAL, 0)
-                signal.signal(signal.SIGALRM, saved_handler)
-            elapsed = round(time.monotonic() - started, 3)
-            rss_after = process.memory_info().rss
-            gpu_after = [torch.cuda.memory_allocated(i) for i in range(2)]
-            count = len(state_dict)
-            if not (1000 <= count <= 100_000):
-                raise ValueError("Unexpected GGUF loader state-dict tensor count")
-            if rss_after - rss_before > 3_000_000_000:
-                raise ValueError("GGUF loader exceeded 3 GB additional resident RAM")
-            if any(after - before > 16 * 1024 * 1024
-                   for before, after in zip(gpu_before, gpu_after)):
-                raise ValueError("GGUF loader unexpectedly allocated GPU weights")
-            # Some BF16 non-linear parameters may have GGML packed shapes.
-            # Inspect metadata only; never dequantize the entire checkpoint.
-            special = (
-                "audio_embeddings_connector.learnable_registers",
-                "video_embeddings_connector.learnable_registers",
-                "keyframes_abs_pos_embedding",
-            )
-            watched = []
-            for suffix in special:
-                matches = [(key, value) for key, value in state_dict.items()
-                           if key.endswith(suffix)]
-                watched.append({
-                    "suffix": suffix, "matches": len(matches),
-                    "tensors": [{"name": key[:160],
-                                 "python_type": type(value).__name__,
-                                 "shape": [int(n) for n in value.shape][:8],
-                                 "tensor_type": str(getattr(value, "tensor_type", ""))[:80]}
-                                for key, value in matches[:2]],
-                })
-            first["comfy_gguf_loader"] = {
-                "ok": True,
-                "entrypoint": "gguf_sd_loader",
-                "tensor_count": count,
-                "elapsed_seconds": elapsed,
-                "rss_before_bytes": rss_before,
-                "rss_after_bytes": rss_after,
-                "gpu_allocated_delta_bytes": [a - b for a, b in zip(gpu_after, gpu_before)],
-                "architecture": str(extra.get("arch_str", ""))[:100],
-                "special_bf16_tensors": watched,
-                "state_dict_parsed_only": True,
-                "comfy_model_constructed": False,
-                "full_model_forward": False,
-                "video_generated": False,
-            }
+            while child.poll() is None:
+                if time.monotonic() - started > 120:
+                    raise TimeoutError("ComfyUI-GGUF loader exceeded 120 seconds")
+                try:
+                    rss = process.memory_info().rss
+                except psutil.NoSuchProcess:
+                    break
+                peak_rss = max(peak_rss, rss)
+                if peak_rss > 3_000_000_000:
+                    raise MemoryError("Loader child exceeded 3 GB resident RAM")
+                time.sleep(0.05)
+            output, errors = child.communicate(timeout=5)
+            if child.returncode:
+                raise RuntimeError("Loader child failed: " + errors[-400:])
+            # Upstream loader may print progress before the final JSON record.
+            data = json.loads(output.strip().splitlines()[-1])
+            if any(n > 16 * 1024 * 1024 for n in data["gpu_peak_allocated_bytes"]):
+                raise MemoryError("Loader GPU peak allocation exceeded 16 MiB")
+            first["comfy_gguf_loader"] = dict(data, ok=True,
+                peak_child_rss_bytes=peak_rss,
+                elapsed_seconds=round(time.monotonic() - started, 3))
         finally:
-            state_dict = None
-            extra = None
-            gc.collect()
-            sys.modules.pop(pkg_name, None)
-            if str(sources / "ComfyUI") in sys.path:
-                sys.path.remove(str(sources / "ComfyUI"))
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=5)
+'''
+
+_CHILD_CODE = '''import importlib
+import json
+import sys
+import types
+from pathlib import Path
+import torch
+
+sources, stage = Path(sys.argv[1]), sys.argv[2]
+sys.path.insert(0, str(sources / "ComfyUI"))
+pkg_name = "cl19_gguf_package"
+package = types.ModuleType(pkg_name)
+package.__path__ = [str(sources / "ComfyUI-GGUF")]
+sys.modules[pkg_name] = package
+module = importlib.import_module(pkg_name + ".loader")
+before = [torch.cuda.memory_allocated(i) for i in range(2)]
+for i in range(2):
+    torch.cuda.reset_peak_memory_stats(i)
+state_dict, extra = module.gguf_sd_loader(stage)
+count = len(state_dict)
+if not (1000 <= count <= 100_000):
+    raise ValueError("Unexpected GGUF loader tensor count")
+special = (
+    "audio_embeddings_connector.learnable_registers",
+    "video_embeddings_connector.learnable_registers",
+    "keyframes_abs_pos_embedding",
+)
+watched = []
+for suffix in special:
+    matches = [(key, value) for key, value in state_dict.items()
+               if key.endswith(suffix)]
+    watched.append({"suffix": suffix, "matches": len(matches),
+        "tensors": [{"name": key[:160], "python_type": type(value).__name__,
+            "shape": [int(n) for n in value.shape][:8],
+            "tensor_type": str(getattr(value, "tensor_type", ""))[:80]}
+            for key, value in matches[:2]]})
+print(json.dumps({
+    "entrypoint": "gguf_sd_loader", "tensor_count": count,
+    "gpu_peak_allocated_bytes": [max(0, torch.cuda.max_memory_allocated(i) - before[i])
+                                 for i in range(2)],
+    "architecture": str(extra.get("arch_str", ""))[:100],
+    "special_bf16_tensors": watched,
+    "state_dict_parsed_only": True, "comfy_model_constructed": False,
+    "full_model_forward": False, "video_generated": False,
+}))
 '''
 
 
 def make_kernel():
     source = CL14_SOURCE
     assert source.count(_MARKER) == 1
-    source = source.replace(_MARKER, _PROBE + _MARKER)
+    source = source.replace(_MARKER, _PROBE.replace("__CL19_CHILD_CODE__", repr(_CHILD_CODE)) + _MARKER)
     for old, new in (
         ("cl14-sources", "cl19-sources"),
         ('"cl14_checks"', '"cl19_checks"'),
@@ -140,10 +147,9 @@ def validate_report(report, sha, run_id):
             or loader.get("comfy_model_constructed") is not False
             or loader.get("full_model_forward") is not False
             or loader.get("video_generated") is not False
-            or len(loader.get("gpu_allocated_delta_bytes", [])) != 2
-            or any(n > 16 * 1024 * 1024 for n in loader["gpu_allocated_delta_bytes"])
-            or loader.get("rss_after_bytes", 0) - loader.get("rss_before_bytes", 0)
-            > 3_000_000_000
+            or len(loader.get("gpu_peak_allocated_bytes", [])) != 2
+            or any(n > 16 * 1024 * 1024 for n in loader["gpu_peak_allocated_bytes"])
+            or not (0 < loader.get("peak_child_rss_bytes", 0) <= 3_000_000_000)
             or len(loader.get("special_bf16_tensors", [])) != 3):
         raise ValueError("Incomplete or unsafe CL-19 ComfyUI-GGUF mmap report")
 

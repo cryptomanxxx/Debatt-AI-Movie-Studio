@@ -6,6 +6,12 @@ from scripts import kaggle_cl13_first_weight as cl13
 
 
 class FirstWeightTest(unittest.TestCase):
+    def test_kaggle_title_matches_canonical_slug(self):
+        # Kaggle canonicalizes notebook titles, and cl7.main checks the resulting URL.
+        import re
+        self.assertEqual(re.sub(r"[^a-z0-9]+", "-", cl13.TITLE.lower()).strip("-"),
+                         cl13.SLUG)
+
     def test_generated_kernel_parses_and_has_one_checkpoint(self):
         source = cl13.KERNEL_SOURCE.replace("__RUN_ID__", "'123-1'").replace(
             "__GIT_SHA__", repr("a" * 40))

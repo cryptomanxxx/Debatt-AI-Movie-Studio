@@ -16,7 +16,8 @@ The workflow requires the existing `KAGGLE_USERNAME` and `KAGGLE_API_TOKEN` GitH
 - Exactly one file is targeted: `ltx-2.5-22b-distilled-Q2_K.gguf` from `unsloth/LTX-2.5-GGUF`. Model revision is resolved to a commit SHA. Repository must be ungated; no authentication workaround is used.
 - The download needs Git-hosted metadata including file size and SHA-256. If unavailable, it stops without downloading.
 - No file larger than **13 GB** is accepted. The local disk must have room for the file plus **4 GB reserve**; free space is checked during streaming. Transfer stops after **12 minutes**.
-- A temporary `.part` file is checked against the declared byte length and SHA-256, then removed in `finally`. The downloaded model file never becomes a GitHub artifact.
+- A temporary `.part` file lives in `/kaggle/temp`, **outside Kaggle's published `/kaggle/working` outputs**. It is checked against the declared byte length and SHA-256, then removed in `finally`. Even if removal fails, the large file is excluded from GitHub artifact retrieval.
+- The 12-minute transfer deadline uses a Unix wall-clock signal to interrupt a blocked network read, independently of the socket inactivity timeout.
 - A missing checksum, timeout, network error, insufficient space, failed checksum, or failed cleanup makes the experiment fail. The JSON diagnostics are preserved where available.
 - The existing CL-8 small dependency installation and source inventory run first. Torch and CUDA versions must remain unchanged and the source checkouts are removed before reporting.
 

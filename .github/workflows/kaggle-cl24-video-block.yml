@@ -1,0 +1,55 @@
+name: Kaggle CL-24 LTX Video Block (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_gpu_use:
+        description: "Type YES to consume Kaggle T4 quota"
+        required: true
+        type: string
+      confirm_weight_download:
+        description: "Type YES_I_APPROVE_Q2_WEIGHT_DOWNLOAD to download 8.46 GB GGUF"
+        required: true
+        type: string
+      confirm_video_block:
+        description: "Type YES_VIDEO_BLOCK for bounded first video transformer block"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: movie-studio-kaggle-gpu
+  cancel-in-progress: false
+
+jobs:
+  video-block:
+    if: ${{ inputs.confirm_gpu_use == 'YES' && inputs.confirm_weight_download == 'YES_I_APPROVE_Q2_WEIGHT_DOWNLOAD' && inputs.confirm_video_block == 'YES_VIDEO_BLOCK' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      EXPERIMENT_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Require Kaggle credentials
+        run: |
+          test -n "$KAGGLE_USERNAME" || { echo "::error::Missing KAGGLE_USERNAME"; exit 1; }
+          test -n "$KAGGLE_API_TOKEN" || { echo "::error::Missing KAGGLE_API_TOKEN"; exit 1; }
+      - name: Install Kaggle CLI
+        run: python -m pip install 'kaggle>=2.2,<3' 'six>=1.16,<2'
+      - name: Submit bounded video block probe
+        run: python -m scripts.kaggle_cl24_video_block --sha "$GITHUB_SHA" --run-id "$EXPERIMENT_RUN_ID" --username "$KAGGLE_USERNAME"
+      - name: Upload diagnostics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: movie-studio-cl24-video-block-${{ github.run_id }}
+          path: kaggle-cl24-results/
+          retention-days: 7
+          if-no-files-found: warn

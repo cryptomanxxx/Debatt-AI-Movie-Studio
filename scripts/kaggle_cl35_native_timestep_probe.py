@@ -21,6 +21,35 @@ _TIMESTEP_PROBE = (
     '    from comfy.ldm.lightricks.av_model import LTXAVModel, CompressedTimestep\n'
     '    if not isinstance(root, LTXAVModel):\n'
     '        raise RuntimeError("Expected native LTXAV timestep model")\n'
+    '    # User-approved, single-matrix exception: AdaLN main modulation is\n'
+    '    # architecturally 9*4096 by 4096 (150,994,944 logical elements).\n'
+    '    # Every other newly executed projection stays below 80M elements.\n'
+    '    allowed_adaln_elements = 9 * 4096 * 4096\n'
+    '    adaln_preflight = []\n'
+    '    for module_name in ("adaln_single", "prompt_adaln_single"):\n'
+    '        module = getattr(root, module_name, None)\n'
+    '        if module is None:\n'
+    '            raise RuntimeError("Missing native AdaLN module " + module_name)\n'
+    '        checked = 0\n'
+    '        for layer_name, layer in module.named_modules():\n'
+    '            if not isinstance(layer, GGMLOps.Linear):\n'
+    '                continue\n'
+    '            weight = getattr(layer, "weight", None)\n'
+    '            if (weight is None or not hasattr(weight, "tensor_type")\n'
+    '                    or len(weight.shape) != 2):\n'
+    '                raise RuntimeError("Unsafe native AdaLN GGUF matrix")\n'
+    '            dims = tuple(int(d) for d in weight.shape)\n'
+    '            count = dims[0] * dims[1]\n'
+    '            if module_name == "adaln_single" and layer_name == "linear":\n'
+    '                if dims != (9 * width, width) or count != allowed_adaln_elements:\n'
+    '                    raise RuntimeError("AdaLN exception dimensions do not match")\n'
+    '            elif min(dims) < 2 or max(dims) > 32768 or count > 80_000_000:\n'
+    '                raise RuntimeError("Unexpected oversized native AdaLN matrix")\n'
+    '            checked += 1\n'
+    '            adaln_preflight.append({"module": module_name, "layer": layer_name,\n'
+    '                                    "shape": list(dims), "elements": count})\n'
+    '        if not (3 <= checked <= 5):\n'
+    '            raise RuntimeError("Unexpected number of native AdaLN projections")\n'
     '    native_ts = []\n'
     '    for ts_value in (1.0, 0.96875):\n'
     '        ts = torch.full((1, 4), ts_value, device="cuda:0", dtype=torch.float32)\n'
@@ -52,6 +81,9 @@ _TIMESTEP_PROBE = (
     '        raise RuntimeError("Timestep embedding did not respond to changed sigma")\n'
     '    native_spec = {"native_av_prepare_timestep": True,\n'
     '                   "checkpoint_adaln_weights": True,\n'
+    '                   "single_adaln_exception_approved": True,\n'
+    '                   "single_adaln_exception_elements": allowed_adaln_elements,\n'
+    '                   "preflight_checked_weights": adaln_preflight,\n'
     '                   "per_frame_compressed": True,\n'
     '                   "native_embedding_used_in_model_forward": False,\n'
     '                   "real_ltx_scheduler": False,\n'
@@ -117,6 +149,8 @@ def validate_report(report, sha, run_id):
     native = model.get("eight_video_blocks", {}).get("native_timestep", {})
     if (native.get("native_av_prepare_timestep") is not True
             or native.get("checkpoint_adaln_weights") is not True
+            or native.get("single_adaln_exception_approved") is not True
+            or native.get("single_adaln_exception_elements") != 150_994_944
             or native.get("per_frame_compressed") is not True
             or native.get("native_embedding_used_in_model_forward") is not False
             or native.get("real_ltx_scheduler") is not False
@@ -124,6 +158,16 @@ def validate_report(report, sha, run_id):
             or native.get("modulation_shape") != [1, 1, 9 * 4096]
             or native.get("embedded_shape") != [1, 1, 4096]
             or native.get("prompt_shape") != [1, 1, 2 * 4096]
+            or not isinstance(native.get("preflight_checked_weights"), list)
+            or len(native["preflight_checked_weights"]) < 6
+            or len(native["preflight_checked_weights"]) > 10
+            or sum(1 for w in native["preflight_checked_weights"]
+                   if w.get("module") == "adaln_single" and w.get("layer") == "linear"
+                   and w.get("shape") == [9 * 4096, 4096]
+                   and w.get("elements") == 150_994_944) != 1
+            or any(w.get("elements", 0) > 80_000_000
+                   for w in native["preflight_checked_weights"]
+                   if not (w.get("module") == "adaln_single" and w.get("layer") == "linear"))
             or native.get("finite") is not True
             or any(not isinstance(native.get(k), (float, int))
                    or not math.isfinite(native[k]) or not (0 < native[k] < 1_000_000)

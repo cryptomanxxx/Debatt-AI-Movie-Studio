@@ -11,6 +11,10 @@ class CL7ImportTests(unittest.TestCase):
         self.assertIn('"--no-deps"', KERNEL_SOURCE)
         self.assertIn('"pip", "check"', KERNEL_SOURCE)
         self.assertIn("MIN_FREE_DISK_BYTES = 19_300_000_000", KERNEL_SOURCE)
+        self.assertIn("shutil.rmtree(sources, ignore_errors=True)", KERNEL_SOURCE)
+        self.assertIn("MIN_FREE_DISK_BYTES + 150_000_000", KERNEL_SOURCE)
+        self.assertIn("source_size(target) > 150_000_000", KERNEL_SOURCE)
+        self.assertIn("decode_output(exc.stderr)", KERNEL_SOURCE)
 
     def test_report_validation_accepts_missing_import_deps_as_diagnostic(self):
         good = {

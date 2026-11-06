@@ -43,3 +43,27 @@ The Kaggle log ends in `Killed` at t≈1,430 s, right at the end of the VAE deco
 **Fix:** prompts are now encoded **first**, with only the tokenizer and UMT5 loaded, using diffusers' own `WanPipeline.encode_prompt` (`max_sequence_length=512`, the `__call__` default). The encoder is then deleted, and the video pipeline is loaded with `text_encoder=None, tokenizer=None` and given `prompt_embeds` / `negative_prompt_embeds`. This removes about 11 GB from system RAM for the whole denoise, decode and upscale phase.
 
 **Equivalence check:** on a tiny, randomly initialised Wan 2.2-shaped pipeline with the same seed, the old path (prompt strings with the encoder inside the pipeline) and the new path produced **bit-identical frames** (max abs diff 0.0).
+
+### Run 42264887400 (`872cb54`): fully verified
+
+[Run 42264887400](https://github.com/cryptomanxxx/Debatt-AI-Movie-Studio/actions/runs/42264887400) passed end to end. FFprobe verified both outputs:
+
+- `wan22-scene.mp4`: H.264, **1280x704**, 49 frames
+- `wan22-scene-1080p.mp4`: H.264, **1920x1080**, 49 frames
+
+Silent-audio copies of both were produced for `assemble`.
+
+| Phase | Time |
+| --- | --- |
+| Model download | 145 s |
+| Prompt encoding + pipeline load | 148 s |
+| 30 denoising steps | 691 s (~22.9 s per step) |
+| VAE decode (512 px tiles) | 391 s |
+| Real-ESRGAN x2 + fit to 1080p | 75 s (2.0 GB peak VRAM) |
+| **Total Kaggle script** | **1,507 s (~25 min)** |
+
+Peak VRAM during video generation was 12.4 of 15.6 GB. No system-RAM kill occurred.
+
+**The RAM fix changed nothing in the image.** The 720p clip is pixel-identical to the clip from run 42255103054, which used the old path with the text encoder inside the pipeline (mean and max absolute difference 0.0). That confirms on real hardware what the tiny-model equivalence check showed.
+
+**1080p vs 720p:** compared with plain bicubic scaling of the 720p frame, Real-ESRGAN gives visibly crisper hair and edges and less compression noise. It cannot add detail the 720p source lacks, so small, blurred eyes in a medium shot stay blurred.

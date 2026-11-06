@@ -116,6 +116,12 @@ class Cl49KernelTests(unittest.TestCase):
         self.assertIn("max_sequence_length=512", source)  # WanPipeline.__call__ default
         self.assertIn('"prompt_embeds": embeds[0], "negative_prompt_embeds": embeds[1]', source)
 
+    def test_default_negative_prompt_targets_faces(self):
+        negative = config()["negative_prompt"]
+        for term in ("deformed eyes", "closed eyes", "morphing face", "distorted face"):
+            self.assertIn(term, negative)
+        self.assertIn("watermark", negative)  # original terms kept
+
 
 class Cl49VerificationTests(unittest.TestCase):
     def test_upscaled_video_probed_at_target_size(self):

@@ -45,7 +45,11 @@ UPSCALER = {
 UPSCALE_TARGETS = {"1080p": (1920, 1080)}
 DEFAULT_NEGATIVE = (
     "blurry, low quality, distorted, deformed, jpeg artifacts, watermark, text, "
-    "subtitles, static image, worst quality"
+    "subtitles, static image, worst quality, "
+    # CL-50: the 720p CL-48 clip showed smeared, half-closed eyes and a face that
+    # morphed during a fast head turn.
+    "deformed eyes, closed eyes, blurry eyes, asymmetric eyes, distorted face, "
+    "morphing face, extra fingers, deformed hands"
 )
 
 

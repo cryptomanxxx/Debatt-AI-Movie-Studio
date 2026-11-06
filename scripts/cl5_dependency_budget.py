@@ -6,6 +6,7 @@ import urllib.request
 from pathlib import Path
 
 from packaging.tags import sys_tags
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import parse_wheel_filename
 from packaging.version import InvalidVersion, Version
 
@@ -36,8 +37,8 @@ CL4_SOURCE_BYTES = 67_420_160
 
 def choose_compatible_wheel(releases, specifier, tags):
     """Pick a release's smallest compatible non-yanked wheel, or return None."""
-    from packaging.specifiers import SpecifierSet
     expected = SpecifierSet(specifier)
+    proxy_python = Version("3.11")
     found = []
     for version, files in releases.items():
         try:
@@ -52,6 +53,14 @@ def choose_compatible_wheel(releases, specifier, tags):
         for candidate in files:
             if candidate.get("packagetype") != "bdist_wheel" or candidate.get("yanked"):
                 continue
+            requires_python = candidate.get("requires_python")
+            if requires_python:
+                try:
+                    if proxy_python not in SpecifierSet(requires_python):
+                        continue
+                except InvalidSpecifier:
+                    # Fail closed if the publisher provides unusable metadata.
+                    continue
             try:
                 _, _, _, wheel_tags = parse_wheel_filename(candidate["filename"])
             except (ValueError, KeyError):

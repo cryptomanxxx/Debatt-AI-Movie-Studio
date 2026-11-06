@@ -93,7 +93,8 @@ for suffix in special:
                if key.endswith(suffix)]
     watched.append({"suffix": suffix, "matches": len(matches),
         "tensors": [{"name": key[:160], "python_type": type(value).__name__,
-            "shape": [int(n) for n in value.shape][:8],
+            "logical_shape": [int(n) for n in value.shape][:8],
+            "packed_storage_shape": [int(n) for n in value.size()][:8],
             "tensor_type": str(getattr(value, "tensor_type", ""))[:80]}
             for key, value in matches[:2]]})
 print(json.dumps({
@@ -150,7 +151,10 @@ def validate_report(report, sha, run_id):
             or len(loader.get("gpu_peak_allocated_bytes", [])) != 2
             or any(n > 16 * 1024 * 1024 for n in loader["gpu_peak_allocated_bytes"])
             or not (0 < loader.get("peak_child_rss_bytes", 0) <= 3_000_000_000)
-            or len(loader.get("special_bf16_tensors", [])) != 3):
+            or len(loader.get("special_bf16_tensors", [])) != 3
+            or any("logical_shape" not in item or "packed_storage_shape" not in item
+                   for group in loader["special_bf16_tensors"]
+                   for item in group.get("tensors", []))):
         raise ValueError("Incomplete or unsafe CL-19 ComfyUI-GGUF mmap report")
 
 

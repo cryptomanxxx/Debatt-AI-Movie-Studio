@@ -66,7 +66,27 @@ class Cl45Tests(unittest.TestCase):
 
     def test_missing_save_node_refuses(self):
         del self.graph["8"]
-        with self.assertRaisesRegex(ValueError, "save/video"):
+        with self.assertRaisesRegex(ValueError, "video-saving"):
+            self.run_prepare()
+
+    def test_image_or_latent_saver_is_not_video_output(self):
+        for saver in ("SaveImage", "SaveLatent"):
+            self.graph["8"]["class_type"] = saver
+            with self.subTest(saver=saver), self.assertRaisesRegex(ValueError, "video-saving"):
+                self.run_prepare()
+
+    def test_flattened_comfyui_subgraph_ids_work(self):
+        self.graph = {"251:" + key: value for key, value in self.graph.items()}
+        self.kwargs = {key: "251:" + value for key, value in self.kwargs.items()}
+        result = self.run_prepare()
+        self.assertEqual(result["graph"]["251:3"]["inputs"]["vae_name"], ASSETS[2][2])
+
+    def test_video_combine_requires_mp4_and_prefix(self):
+        self.graph["8"] = {"class_type": "VHS_VideoCombine", "inputs":
+                            {"filename_prefix": "first-video", "format": "video/h264-mp4"}}
+        self.assertIn("VHS_VideoCombine", self.run_prepare()["report"]["video_output_nodes"])
+        self.graph["8"]["inputs"]["format"] = "image/gif"
+        with self.assertRaisesRegex(ValueError, "video-saving"):
             self.run_prepare()
 
     def test_duplicate_node_ids_refuses(self):

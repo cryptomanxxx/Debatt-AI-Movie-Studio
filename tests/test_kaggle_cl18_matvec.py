@@ -1,6 +1,7 @@
 import ast
 import re
 import unittest
+from types import SimpleNamespace
 
 from scripts import kaggle_cl18_matvec as cl18
 
@@ -12,6 +13,7 @@ class MatvecTest(unittest.TestCase):
         ast.parse(source)
         self.assertEqual(cl18.SLUG, re.sub(r"[^a-z0-9]+", "-", cl18.TITLE.lower()).strip("-"))
         self.assertIn("cpu_result = torch.mv(cpu_matrix, cpu_input)", source)
+        self.assertIn("reversed(whole_source.shape)", source)
         self.assertIn("gpu_result = torch.mv(gpu_matrix, gpu_input)", source)
         self.assertIn("torch.allclose(actual, cpu_result, rtol=1e-3, atol=1e-3)", source)
         self.assertIn("128 * 1024 * 1024", source)
@@ -20,6 +22,18 @@ class MatvecTest(unittest.TestCase):
         self.assertIn("stage.unlink()", source)
         self.assertIn('report["ltx_loaded"] = False', source)
         self.assertIn('report["video_generated"] = False', source)
+
+    def test_nonsquare_ggml_dimensions_are_reversed(self):
+        source = cl18.KERNEL_SOURCE
+        lines = [line.strip() for line in source.splitlines()
+                 if line.strip().startswith("dims = tuple(")]
+        self.assertEqual(len(lines), 1)
+        expression = ast.parse(lines[0]).body[0].value
+        # GGML order (3, 2) corresponds to a 2-row, 3-column matrix.
+        dims = eval(compile(ast.Expression(expression), "<dimension-test>", "eval"),
+                    {"tuple": tuple, "int": int, "reversed": reversed},
+                    {"whole_source": SimpleNamespace(shape=(3, 2))})
+        self.assertEqual(dims, (2, 3))
 
     def test_validation_requires_cpu_gpu_agreement(self):
         sha, run = "a" * 40, "50-1"

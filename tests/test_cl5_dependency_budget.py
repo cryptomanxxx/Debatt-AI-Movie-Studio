@@ -7,9 +7,9 @@ from scripts.cl5_dependency_budget import (
 )
 
 
-def wheel(filename, size, *, yanked=False):
+def wheel(filename, size, *, yanked=False, requires_python=None):
     return {"filename": filename, "size": size, "packagetype": "bdist_wheel",
-            "yanked": yanked}
+            "yanked": yanked, "requires_python": requires_python}
 
 
 class DependencyBudgetTests(unittest.TestCase):
@@ -32,6 +32,17 @@ class DependencyBudgetTests(unittest.TestCase):
             wheel("example-1.0.0-py3-none-any.whl", 200, yanked=True),
         ]}
         self.assertIsNone(choose_compatible_wheel(versions, "", self.tags))
+
+    def test_requires_python_excludes_latest_release_for_proxy_python311(self):
+        versions = {
+            "1.0.0": [wheel("example-1.0.0-py3-none-any.whl", 100,
+                            requires_python=">=3.9")],
+            "2.0.0": [wheel("example-2.0.0-py3-none-any.whl", 200,
+                            requires_python=">=3.12")],
+        }
+        self.assertEqual(choose_compatible_wheel(versions, "", self.tags)["version"], "1.0.0")
+        self.assertIsNone(choose_compatible_wheel(
+            {"2.0.0": versions["2.0.0"]}, "", self.tags))
 
     def test_unknown_package_never_approves_complete_fit(self):
         releases = {name: {"99.0.0": [wheel(f"{name.replace('-', '_')}-99.0.0-py3-none-any.whl", 123)]}

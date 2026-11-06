@@ -11,6 +11,8 @@ from scripts.kaggle_cl6_install_probe import KERNEL_SOURCE as CL6_SOURCE
 from scripts.kaggle_gpu_probe import MAX_POLLS, POLL_SECONDS, execute
 
 SLUG = "debatt-ai-movie-cl7-import-probe"
+TITLE = "Debatt AI Movie CL7 Import Probe"
+REPORT_NAME = "cl7-import-probe.json"
 RESULTS = Path("kaggle-cl7-results")
 SUBMISSION = Path("kaggle-cl7-submission")
 
@@ -149,7 +151,7 @@ def main():
     (SUBMISSION / "run.py").write_text(
         KERNEL_SOURCE.replace("__RUN_ID__", repr(args.run_id)).replace("__GIT_SHA__", repr(args.sha)),
         encoding="utf-8")
-    metadata = {"id": f"{args.username}/{SLUG}", "title": "Debatt AI Movie CL7 Import Probe",
+    metadata = {"id": f"{args.username}/{SLUG}", "title": TITLE,
                 "code_file": "run.py", "language": "python", "kernel_type": "script",
                 "is_private": True, "enable_gpu": True, "enable_internet": True,
                 "machine_shape": "NvidiaTeslaT4", "dataset_sources": [],
@@ -187,7 +189,7 @@ def main():
         (RESULTS / "download.log").write_text(output.stdout, encoding="utf-8")
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f"Cannot retrieve Kaggle diagnostics: {exc}") from exc
-    path = RESULTS / "cl7-import-probe.json"
+    path = RESULTS / REPORT_NAME
     if not path.is_file():
         raise RuntimeError("CL-7 report missing; see Kaggle output")
     report = json.loads(path.read_text(encoding="utf-8"))

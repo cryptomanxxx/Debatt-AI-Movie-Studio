@@ -46,6 +46,8 @@ def preflight(comfy_root):
         "runtime": "ComfyUI",
         "workflow": WORKFLOW,
         "workflow_source": "official_ComfyUI_template",
+        "video_vae_template_override": "ltx-2.5-video-vae-conv-bf16.safetensors",
+        "template_requires_video_vae_override": True,
         "official_documentation": OFFICIAL_GUIDE,
         "strategy": "official_lower_vram_int8_convrot_not_gguf_substitution",
         "comfy_root": str(comfy_root),
@@ -63,7 +65,7 @@ def preflight(comfy_root):
         "video_generated": False,
         "automatic_downloads": False,
         "gpu_used": False,
-        "next_action": "Verify official model hashes and import LTX first/last-frame workflow",
+        "next_action": "Verify model hashes, import First/Last-Frame template, then change its video_vae selector from BF16 DiffVAE to the Conv VAE before queuing",
     }
 
 

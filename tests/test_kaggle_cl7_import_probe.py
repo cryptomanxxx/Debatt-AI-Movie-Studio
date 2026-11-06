@@ -1,3 +1,4 @@
+import ast
 import unittest
 
 from scripts.kaggle_cl7_import_probe import KERNEL_SOURCE, validate_report
@@ -5,6 +6,10 @@ from scripts.kaggle_cl7_import_probe import KERNEL_SOURCE, validate_report
 
 class CL7ImportTests(unittest.TestCase):
     def test_no_model_and_no_server(self):
+        notebook = ast.parse(KERNEL_SOURCE.replace("__RUN_ID__", "'test'").replace("__GIT_SHA__", "'sha'"))
+        imports = {alias.name for node in notebook.body if isinstance(node, ast.Import)
+                   for alias in node.names}
+        self.assertIn("time", imports)
         self.assertNotIn("snapshot_download", KERNEL_SOURCE)
         self.assertNotIn("hf_hub_download", KERNEL_SOURCE)
         self.assertNotIn("main.py", KERNEL_SOURCE)

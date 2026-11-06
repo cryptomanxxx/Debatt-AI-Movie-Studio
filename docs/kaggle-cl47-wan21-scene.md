@@ -31,11 +31,43 @@ The private Kaggle script (T4, internet on, 90-minute limit) does the following:
 
 The GitHub runner then checks the commit SHA and run ID in the report. It also uses FFprobe to confirm that the MP4 has exactly the requested frame count and resolution. If any step fails, the job fails and keeps the Kaggle error report. No placeholder video is produced.
 
-## Verified so far, and what is not
+## First real run (2026-11-06)
 
-- Offline unit tests cover input validation, safe prompt embedding, report and video validation, and blank/NaN frame rejection.
-- Before this PR, the kernel's `load_pipeline` and `render` functions ran on a CPU against the pinned package set. They used a tiny, randomly initialised Wan pipeline (real diffusers code, fake weights). That test produced a 17-frame H.264 MP4 that passed `probe_video`.
-- **Not yet verified:** a real Kaggle run. Download time, runtime per step on a T4, whether fp16 gives clean frames and whether RAM is sufficient are all unknown until the first run. Expect roughly 10–30 minutes for a 2-second clip at 832x480. This is an estimate, not a measurement.
+[Run 42233991439](https://github.com/cryptomanxxx/Debatt-AI-Movie-Studio/actions/runs/42233991439) rendered and verified the project's first real AI scene. It used the default settings: 33 frames at 832x480, 25 steps, seed 42, float16 transformer. The prompt was *"Two people debate passionately on a dimly lit TV studio stage, cinematic lighting, slow camera push-in"*.
+
+**Kaggle machine (measured)**
+
+| Resource | Value |
+| --- | --- |
+| GPU | 2 × Tesla T4, 15.6 GB VRAM each (only GPU 0 used) |
+| System RAM | 33.7 GB |
+| Free disk for the model cache | ~1 TB |
+| PyTorch | 2.11.0+cu130 |
+
+**Timings and memory (measured)**
+
+| Phase | Result |
+| --- | --- |
+| Model download (28.9 GB, revision `0fad780a534b6463e45facd96134c9f345acfa5b`) | 122 s |
+| Pipeline load | 127 s |
+| Generation, 25 steps | 372 s (~15 s per step) |
+| Total Kaggle script | 673 s (~11 min) |
+| GitHub workflow end to end | ~13 min |
+| Peak VRAM (model CPU offload) | 11.7 GB of 15.6 GB |
+
+**Output:** an H.264 MP4 at 832x480 with 33 frames (2.06 s at 16 fps), 58 KB. FFprobe verified it, and all frames were finite with no NaN or blank output. `float16` gave clean frames, so `float32` was not needed.
+
+**Visual check:** the clip shows a coherent, dark TV studio with red lighting, a round table and a slow camera push-in, which matches the prompt. It shows four people instead of the requested two, the figures are small, and there is very little motion (mean absolute frame difference 0.004). Clearer prompts are needed to control the number of people, the framing and the action.
+
+**Notes**
+
+- pip printed a dependency-resolver warning about Kaggle's preinstalled packages. It did not affect the run.
+- Generation time grows with the number of frames and the resolution. The values above apply only to 33 frames at 832x480. Longer clips have not been measured yet.
+
+## Offline verification
+
+- Unit tests cover input validation, safe prompt embedding, report and video validation, and blank/NaN frame rejection.
+- The kernel's `load_pipeline` and `render` functions were also run on a CPU with the pinned package set. They used a tiny, randomly initialised Wan pipeline (real diffusers code, fake weights).
 
 ## Limits
 

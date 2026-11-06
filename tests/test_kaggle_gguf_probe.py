@@ -3,10 +3,26 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from scripts.kaggle_gguf_probe import KERNEL_SOURCE, retrieve_diagnostics, validate_report
+from scripts.kaggle_gguf_probe import (
+    KERNEL_SOURCE, parse_published_kernel, retrieve_diagnostics, validate_report,
+)
 
 
 class KaggleGGUFProbeTests(unittest.TestCase):
+    def test_kaggle_canonical_url_overrides_requested_id(self):
+        output = ("Your kernel title does not resolve to the specified id.\n"
+                  "Kernel version 1 successfully pushed. Please check progress at "
+                  "https://www.kaggle.com/code/neonhawk/debatt-ai-movie-gguf-environment-probe")
+        self.assertEqual(
+            parse_published_kernel(output, "neonhawk"),
+            "neonhawk/debatt-ai-movie-gguf-environment-probe",
+        )
+        with self.assertRaises(ValueError):
+            parse_published_kernel(output, "another-owner")
+        with self.assertRaises(ValueError):
+            parse_published_kernel(output.replace("gguf-environment-probe", "some-other-notebook"),
+                                   "neonhawk")
+
     def test_no_model_download_code(self):
         self.assertNotIn("hf_hub_download", KERNEL_SOURCE)
         self.assertNotIn("snapshot_download", KERNEL_SOURCE)

@@ -11,6 +11,14 @@ REPORT_NAME = "cl28-video-rope.json"
 RESULTS = Path("kaggle-cl28-results")
 SUBMISSION = Path("kaggle-cl28-submission")
 
+# [batch][t/y/x][token][start/end]. The target AV checkpoint sets
+# use_middle_indices_grid=True, which requires a four-dimensional grid.
+SYNTHETIC_COORDINATE_PAIRS = [[
+    [[0, 1], [0, 1], [0, 1], [0, 1]],
+    [[0, 1], [0, 1], [1, 2], [1, 2]],
+    [[0, 1], [1, 2], [0, 1], [1, 2]],
+]]
+
 _ROPE_BLOCK = CL24B_BLOCK.replace(
     '# No audio path, actual RoPE, diffusion timestep embedding or full model.',
     '# No audio path, real text encoder, diffusion timestep embedding or full model.'
@@ -27,8 +35,10 @@ _ROPE_BLOCK = CL24B_BLOCK.replace(
     '    prompt_timestep = torch.zeros((1, 2, 2 * context_width), device="cuda:0", dtype=torch.float16)',
     '    prompt_timestep = torch.zeros((1, 4, 2 * context_width), device="cuda:0", dtype=torch.float16)\n'
     '    # Four distinct synthetic (frame, y, x) coordinates; 25 fps for video time.\n'
-    '    coords = torch.tensor([[[0, 0, 1, 1], [0, 1, 0, 1], [0, 0, 1, 1]]],\n'
+    '    coords = torch.tensor(' + repr(SYNTHETIC_COORDINATE_PAIRS) + ',\n'
     '                          device="cuda:0", dtype=torch.float32)\n'
+    '    if tuple(coords.shape) != (1, 3, 4, 2) or not root.use_middle_indices_grid:\n'
+    '        raise RuntimeError("Unexpected LTX middle-grid RoPE coordinate contract")\n'
     '    # Explicit base video implementation: LTXAVModel overrides this method for AV pairs.\n'
     '    from comfy.ldm.lightricks.model import LTXBaseModel\n'
     '    if not isinstance(root, LTXBaseModel):\n'

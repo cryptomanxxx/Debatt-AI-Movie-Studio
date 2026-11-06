@@ -29,7 +29,7 @@ All runs used the same prompt and seed as CL-48b's 720p run: 1280x704, 49 frames
 
 | Phase | CL-48b (256 px tiles) | CL-49 (512 px tiles) |
 | --- | --- | --- |
-| Denoising, 30 steps | ~616 s | 764 s (includes prompt encoding and the first step) |
+| Prompt encoding + 30 denoising steps | ~723 s | 764 s |
 | VAE decode + export | ~553 s | **411 s** |
 | Real-ESRGAN x2 + fit to 1080p, 49 frames | – | **73 s** (about 1.5 s per frame, 2.0 GB peak VRAM) |
 | Total Kaggle script | 1,564 s | 1,549 s |
